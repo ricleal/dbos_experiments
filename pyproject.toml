@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "dbos-experiments"
+version = "0.1.0"
+description = ""
+authors = ["Ricardo Leal <ricleal@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+dbos = "^0.18.0"
+fastapi = "^0.115.7"
+pgcli = "^4.1.0"
+
+
+[tool.poetry.group.dev.dependencies]
+ipython = "^8.31.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

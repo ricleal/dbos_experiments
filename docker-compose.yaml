@@ -1,19 +1,17 @@
 services:
-  postgres-dev:
+  postgres:
     image: postgres:17.2
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-      PGUSER: ${POSTGRES_USER}
-      PGDATABASE: ${POSTGRES_DB}
     ports:
-      - 127.0.0.1:${POSTGRES_PORT:-5432}:5432
+      - ${POSTGRES_PORT:-5432}:5432
     command: >
       -c logging_collector=on
       -c log_directory=/var/lib/postgresql/log
       -c log_filename=postgresql.log
       -c log_statement=all
     volumes:
-      - pglog:/var/lib/postgresql/log
-      - pgdata:/var/lib/postgresql/data
+      - ./pglog:/var/lib/postgresql/log
+      - ./pgdata:/var/lib/postgresql/data
