@@ -30,15 +30,18 @@ queue = Queue("example_queue", concurrency=10, limiter={"limit": 50, "period": 3
 
 @DBOS.transaction()
 def process_task(task: dict):
-    try:
-        result: CursorResult = DBOS.sql_session.execute(
-            insert(Accesses).values(user_id=task["user_id"], status=Status.requested)
-        )
-    except Exception as e:
-        DBOS.sql_session.execute(insert(Errors).values(message=str(e)))
-        # DBOS.logger.error(f"Error processing task: {str(e)}")
-        return
+    result: CursorResult = DBOS.sql_session.execute(
+        insert(Accesses).values(user_id=task["user_id"], status=Status.requested)
+    )
     DBOS.logger.info(f"Workflow step transaction: {result.rowcount} rows inserted")
+
+
+@DBOS.transaction()
+def process_error(error: str):
+    result: CursorResult = DBOS.sql_session.execute(
+        insert(Errors).values(message=str(error))
+    )
+    DBOS.logger.error(f"Workflow error transaction: {result.rowcount} rows inserted")
 
 
 @DBOS.workflow()
@@ -52,7 +55,14 @@ def process_tasks(tasks: dict):
         task_handles.append(handle)
     # Wait for each task to complete and retrieve its result.
     # Return the results of all tasks.
-    # return [handle.get_result() for handle in task_handles]
+    for handle in task_handles:
+        try:
+            res = handle.get_result()
+        except Exception as e:
+            process_error(f"Task failed: {handle}::{e}")
+            DBOS.logger.error(f"Task failed: {handle}::{e}")
+            continue
+        DBOS.logger.info(f"** Task result: {res}")
 
 
 @app.get("/")

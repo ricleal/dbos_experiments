@@ -28,7 +28,7 @@ psql -f sql/m0001.sql
 ## Run the code
 
 ```bash
-fastapi run main.py
+fastapi dev main.py
 ```
 
 ## Generate SQLAlchemy models from the DB
