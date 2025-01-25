@@ -7,11 +7,12 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - ${POSTGRES_PORT:-5432}:5432
-    command: >
-      -c logging_collector=on
-      -c log_directory=/var/lib/postgresql/log
-      -c log_filename=postgresql.log
-      -c log_statement=all
+    command: -c log_statement=all
+    # command: >
+    #   -c logging_collector=on
+    #   -c log_directory=/var/lib/postgresql/log
+    #   -c log_filename=postgresql.log
+    #   -c log_statement=all
     volumes:
       - ./pglog:/var/lib/postgresql/log
       - ./pgdata:/var/lib/postgresql/data

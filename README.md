@@ -30,3 +30,9 @@ psql -f sql/m0001.sql
 ```bash
 fastapi run main.py
 ```
+
+## Generate SQLAlchemy models from the DB
+
+```bash
+sqlacodegen --generator declarative --options nojoined  --outfile ./exp/models.py $POSTGRES_URL
+```

@@ -7,12 +7,13 @@ name: dbos_experiments
 language: python
 runtimeConfig:
   start:
-    - "fastapi run ./main.py"
+    - "fastapi dev ./main.py"
 database:
   hostname: ${PGHOST}
   port: ${PGPORT}
   username: ${PGUSER}
   password: ${PGPASSWORD}
+  app_db_name: ${PGDATABASE}
   migrate:
     - echo 'No migrations specified'
 telemetry:
