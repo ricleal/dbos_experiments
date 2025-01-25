@@ -5,7 +5,7 @@ from dbos import DBOS, Queue, SetWorkflowID, WorkflowHandle, WorkflowStatus
 from fastapi import FastAPI
 from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse
-from sqlalchemy import insert
+from sqlalchemy import insert, select
 from sqlalchemy.engine.cursor import CursorResult
 
 from exp.models import Accesses, Errors
@@ -62,10 +62,10 @@ def process_tasks(tasks: dict):
             process_error(f"Task failed: {handle}::{e}")
             DBOS.logger.error(f"Task failed: {handle}::{e}")
             continue
-        DBOS.logger.info(f"** Task result: {res}")
+        DBOS.logger.info(f"Got Task result: {res}")
 
 
-@app.get("/")
+@app.get("/submit")
 def fastapi_endpoint():
 
     wfid = str(uuid.uuid4())
@@ -87,3 +87,23 @@ def fastapi_endpoint():
     return JSONResponse(
         content=dict(event=event, wf_status=str(status), workflow_id=handle.workflow_id)
     )
+
+
+@DBOS.transaction()
+def get_transaction_errors():
+    # errors = DBOS.sql_session.query(Errors).all()
+    errors = DBOS.sql_session.execute(
+        select(Errors.id, Errors.message).order_by(Errors.created_at.desc())
+    ).all()
+    return {str(e.id): e.message for e in errors}
+
+
+@DBOS.workflow()
+def get_worflow_errors():
+    return get_transaction_errors()
+
+
+@app.get("/errors")
+def get_errors():
+    ret = get_worflow_errors()
+    return JSONResponse(content=ret)
