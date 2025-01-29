@@ -14,5 +14,9 @@ database:
   migrate:
     - echo 'No migrations specified'
 telemetry:
+  OTLPExporter:
+    # logsEndpoint: http://localhost:4317/v1/logs
+    tracesEndpoint: http://localhost:4317/v1/traces
   logs:
-    logLevel: INFO
+    addContextMetadata: true
+    logLevel: DEBUG

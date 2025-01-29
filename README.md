@@ -42,10 +42,20 @@ pgcli
 ## Run SQL script
 psql -f sql/m0001.sql
 
-## Run the code
+## Demo
 fastapi dev main.py
 
 ## Generate SQLAlchemy models from the DB
 sqlacodegen --generator declarative --options nojoined  --outfile ./exp/models.py $POSTGRES_URL
 
 ```
+
+## Metrics
+
+The demo exposes the following backends:
+
+- Jaeger at http://0.0.0.0:16686
+- Zipkin at http://0.0.0.0:9411
+- Prometheus at http://0.0.0.0:9090
+
+Based on (OTEL sample)[https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/examples/demo/README.md].
