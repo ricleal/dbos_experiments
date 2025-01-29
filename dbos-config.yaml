@@ -15,8 +15,10 @@ database:
     - echo 'No migrations specified'
 telemetry:
   OTLPExporter:
-    # logsEndpoint: http://localhost:4317/v1/logs
+    logsEndpoint: http://localhost:4317/v1/logs
     tracesEndpoint: http://localhost:4317/v1/traces
   logs:
     addContextMetadata: true
     logLevel: DEBUG
+env:
+  OTEL_SERVICE_NAME: dbos-experiments
