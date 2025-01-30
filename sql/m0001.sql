@@ -8,6 +8,8 @@ drop type if exists status;
 
 drop table if exists random_users;
 
+drop table if exists tasks;
+
 create type status as enum ('requested', 'approved', 'rejected', 'canceled');
 
 create table if not exists users (
@@ -39,38 +41,22 @@ values
         '00000000-00000000-00000000-00000001',
         'Alice',
         'alice@foo.bar'
-    );
-
-insert into
-    users (id, name, email)
-values
+    ),
     (
         '00000000-00000000-00000000-00000002',
         'Bob',
         'bob@foo.bar'
-    );
-
-insert into
-    users (id, name, email)
-values
+    ),
     (
         '00000000-00000000-00000000-00000003',
         'Charlie',
         'charlie@foo.bar'
-    );
-
-insert into
-    users (id, name, email)
-values
+    ),
     (
         '00000000-00000000-00000000-00000004',
         'David',
         'david@foo.bar'
-    );
-
-insert into
-    users (id, name, email)
-values
+    ),
     (
         '00000000-00000000-00000000-00000005',
         'Eve',
@@ -145,8 +131,8 @@ create table if not exists random_users (
     state VARCHAR(255),
     country VARCHAR(255),
     postcode VARCHAR(255),
-    latitude DECIMAL(10, 8),
-    longitude DECIMAL(10, 8),
+    latitude double precision,
+    longitude double precision,
     timezone_offset VARCHAR(255),
     timezone_description VARCHAR(255),
     email VARCHAR(255),
@@ -168,4 +154,11 @@ create table if not exists random_users (
     picture_medium VARCHAR(255),
     picture_thumbnail VARCHAR(255),
     nat VARCHAR(255)
+);
+
+create table if not exists tasks (
+    id uuid primary key default gen_random_uuid(),
+    title text null,
+    data jsonb not null,
+    created_at timestamp not null default now()
 );

@@ -1,9 +1,9 @@
 from typing import List, Optional
 
-from sqlalchemy import DateTime, Enum, ForeignKeyConstraint, Integer, Numeric, PrimaryKeyConstraint, String, Text, UniqueConstraint, Uuid, text
+from sqlalchemy import DateTime, Double, Enum, ForeignKeyConstraint, Integer, PrimaryKeyConstraint, String, Text, UniqueConstraint, Uuid, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 import datetime
-import decimal
 import uuid
 
 class Base(DeclarativeBase):
@@ -37,9 +37,9 @@ class RandomUsers(Base):
     city: Mapped[Optional[str]] = mapped_column(String(255))
     state: Mapped[Optional[str]] = mapped_column(String(255))
     country: Mapped[Optional[str]] = mapped_column(String(255))
-    postcode: Mapped[Optional[int]] = mapped_column(Integer)
-    latitude: Mapped[Optional[decimal.Decimal]] = mapped_column(Numeric(10, 8))
-    longitude: Mapped[Optional[decimal.Decimal]] = mapped_column(Numeric(10, 8))
+    postcode: Mapped[Optional[str]] = mapped_column(String(255))
+    latitude: Mapped[Optional[float]] = mapped_column(Double(53))
+    longitude: Mapped[Optional[float]] = mapped_column(Double(53))
     timezone_offset: Mapped[Optional[str]] = mapped_column(String(255))
     timezone_description: Mapped[Optional[str]] = mapped_column(String(255))
     email: Mapped[Optional[str]] = mapped_column(String(255))
@@ -61,6 +61,18 @@ class RandomUsers(Base):
     picture_medium: Mapped[Optional[str]] = mapped_column(String(255))
     picture_thumbnail: Mapped[Optional[str]] = mapped_column(String(255))
     nat: Mapped[Optional[str]] = mapped_column(String(255))
+
+
+class Tasks(Base):
+    __tablename__ = 'tasks'
+    __table_args__ = (
+        PrimaryKeyConstraint('id', name='tasks_pkey'),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, server_default=text('gen_random_uuid()'))
+    data: Mapped[dict] = mapped_column(JSONB)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=text('now()'))
+    title: Mapped[Optional[str]] = mapped_column(Text)
 
 
 class Users(Base):
