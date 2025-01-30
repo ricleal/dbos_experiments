@@ -1,8 +1,8 @@
 receivers:
   otlp:
     protocols:
-      # grpc:
-      #   endpoint: 0.0.0.0:4317
+      grpc:
+        endpoint: 0.0.0.0:4318
       http:
         endpoint: 0.0.0.0:4317
 
@@ -44,6 +44,10 @@ service:
       receivers: [otlp]
       processors: [batch]
       exporters: [debug, prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, otlp]
   telemetry:
     metrics:
       readers:

@@ -30,6 +30,7 @@ queue = Queue("example_queue", concurrency=10, limiter={"limit": 50, "period": 3
 
 @DBOS.transaction()
 def process_task(task: dict):
+    DBOS.span.set_attributes(task)
     result: CursorResult = DBOS.sql_session.execute(
         insert(Accesses).values(user_id=task["user_id"], status=Status.requested)
     )
@@ -38,6 +39,7 @@ def process_task(task: dict):
 
 @DBOS.transaction()
 def process_error(error: str):
+    DBOS.span.set_attribute("error", error)
     result: CursorResult = DBOS.sql_session.execute(
         insert(Errors).values(message=str(error))
     )
@@ -51,6 +53,7 @@ def process_tasks(tasks: dict):
     task_handles = []
     # Enqueue each task so all tasks are processed concurrently.
     for task in tasks:
+        DBOS.span.set_attributes({"task": str(task)})
         handle = queue.enqueue(process_task, dict(user_id=task))
         task_handles.append(handle)
     # Wait for each task to complete and retrieve its result.
@@ -58,6 +61,7 @@ def process_tasks(tasks: dict):
     for handle in task_handles:
         try:
             res = handle.get_result()
+            DBOS.span.set_attribute("task_result", str(res))
         except Exception as e:
             process_error(f"Task failed: {handle}::{e}")
             DBOS.logger.error(f"Task failed: {handle}::{e}")
@@ -67,7 +71,7 @@ def process_tasks(tasks: dict):
 
 @app.get("/submit")
 def fastapi_endpoint():
-
+    DBOS.span.set_attribute("endpoint", "submit")
     wfid = str(uuid.uuid4())
     with SetWorkflowID(wfid):
         handle: WorkflowHandle = DBOS.start_workflow(
@@ -105,5 +109,30 @@ def get_worflow_errors():
 
 @app.get("/errors")
 def get_errors():
+    DBOS.span.set_attribute("endpoint", "errors")
     ret = get_worflow_errors()
     return JSONResponse(content=ret)
+
+
+@app.post("/batch/{count}")
+def batch_endpoint(count: int):
+    DBOS.span.set_attributes({"endpoint": "batch", "count": count})
+    wfid = str(uuid.uuid4())
+
+    user_ids = [
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-0000-0000-000000000002",
+        "00000000-0000-0000-0000-000000000003",
+    ]
+    user_ids = user_ids * count
+
+    with SetWorkflowID(wfid):
+        handle: WorkflowHandle = DBOS.start_workflow(process_tasks, user_ids)
+
+    status: WorkflowStatus = handle.get_status()
+    event = DBOS.get_event(handle.workflow_id, EVENT_KEY)
+    if not status:
+        raise HTTPException(status_code=404, detail="batch workflow failed to start")
+    return JSONResponse(
+        content=dict(event=event, wf_status=str(status), workflow_id=handle.workflow_id)
+    )

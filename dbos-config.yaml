@@ -18,7 +18,7 @@ telemetry:
     logsEndpoint: http://localhost:4317/v1/logs
     tracesEndpoint: http://localhost:4317/v1/traces
   logs:
-    addContextMetadata: true
-    logLevel: DEBUG
+    # addContextMetadata: true
+    logLevel: INFO
 env:
   OTEL_SERVICE_NAME: dbos-experiments

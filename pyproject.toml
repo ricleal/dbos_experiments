@@ -10,6 +10,7 @@ python = "^3.12"
 dbos = "^0.18.0"
 fastapi = "^0.115.7"
 pgcli = "^4.1.0"
+requests = "^2.32.3"
 
 
 [tool.poetry.group.dev.dependencies]
