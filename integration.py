@@ -7,6 +7,13 @@ import random
 from typing import Any, Dict
 
 from dbos import DBOS, Queue
+from opentelemetry import metrics
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import (
+    ConsoleMetricExporter,
+    PeriodicExportingMetricReader,
+)
 from sqlalchemy import insert
 
 from exp.models import Errors, Tasks
@@ -19,13 +26,42 @@ random.seed(42)
 queue = Queue("integration_queue")
 
 
+# Configure the OTLP exporter
+otlp_exporter = OTLPMetricExporter(endpoint="http://localhost:4317/v1/metrics")
+
+# Create a MeterProvider
+meter_provider = MeterProvider(
+    metric_readers=[
+        PeriodicExportingMetricReader(
+            otlp_exporter, export_interval_millis=1000, export_timeout_millis=5000
+        ),
+        PeriodicExportingMetricReader(ConsoleMetricExporter()),
+    ]
+)
+
+# Use the meter provider
+metrics.set_meter_provider(meter_provider)
+
+# Get a meter instance
+meter = metrics.get_meter(__name__)
+
+# Create a counter metric
+counter = meter.create_counter(
+    name="persistent_counter",
+    description="This is a counter to count database operations",
+    unit="1",
+)
+
+
 @DBOS.transaction()
 def insert_error(message: str):
+    counter.add(1, attributes=dict(operation="insert_error"))
     return DBOS.sql_session.execute(insert(Errors).values(message=message))
 
 
 @DBOS.transaction()
 def insert_task(data: Dict[str, Any], title: str = None):
+    counter.add(1, attributes=dict(operation="insert_task"))
     return DBOS.sql_session.execute(insert(Tasks).values(data=data, title=title))
 
 
@@ -46,6 +82,8 @@ def process():
         try:
             data = transform_data(dict(data=f"task {i+random.randint(1, 100)}"))
             data_transformed.append(data)
+            DBOS.logger.info(f"Transformed data: {data}")
+            DBOS.sleep(0.1)
         except Exception as e:
             DBOS.logger.error(f"Error transforming data: {e}")
             insert_error(str(e))
