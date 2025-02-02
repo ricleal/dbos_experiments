@@ -63,62 +63,12 @@ values
         'eve@ex.co'
     );
 
--- {
---     "cell": "L21 X70-3497",
---     "dob": {
---         "age": 71,
---         "date": "1953-06-10T10:46:57.964Z"
---     },
---     "email": "amelia.knight@example.com",
---     "gender": "female",
---     "id": {
---         "name": "SIN",
---         "value": "862989829"
---     },
---     "location": {
---         "city": "Windsor",
---         "coordinates": {
---             "latitude": "-64.9294",
---             "longitude": "62.6672"
---         },
---         "country": "Canada",
---         "postcode": "D6P 1C6",
---         "state": "Saskatchewan",
---         "street": {
---             "name": "Vimy St",
---             "number": 3837
---         },
---         "timezone": {
---             "description": "Bombay, Calcutta, Madras, New Delhi",
---             "offset": "+5:30"
---         }
---     },
---     "login": {
---         "md5": "dcd031836a8bd780b2d5343eb2a52fe7",
---         "password": "ciccio",
---         "salt": "AcJWf2XE",
---         "sha1": "611c60639cbea4fd8aa41aedb3d1aa6c11ce27ff",
---         "sha256": "496be9e2e0759b6fe1bc6937937b8bfb422f9d2be28846bff02522e84145f4e3",
---         "username": "whitepeacock226",
---         "uuid": "17eb6ffe-d609-4c1d-873e-b22a8a785694"
---     },
---     "name": {
---         "first": "Amelia",
---         "last": "Knight",
---         "title": "Ms"
---     },
---     "nat": "CA",
---     "phone": "Q45 I45-2901",
---     "picture": {
---         "large": "https://randomuser.me/api/portraits/women/54.jpg",
---         "medium": "https://randomuser.me/api/portraits/med/women/54.jpg",
---         "thumbnail": "https://randomuser.me/api/portraits/thumb/women/54.jpg"
---     },
---     "registered": {
---         "age": 10,
---         "date": "2014-10-30T17:21:48.640Z"
---     }
--- }
+insert into accesses (user_id, status)
+values ('00000000-00000000-00000000-00000001', 'requested'),
+       ('00000000-00000000-00000000-00000002', 'approved'),
+       ('00000000-00000000-00000000-00000003', 'rejected'),
+       ('00000000-00000000-00000000-00000004', 'canceled');
+
 create table if not exists random_users (
     id uuid primary key,
     gender VARCHAR(255),
