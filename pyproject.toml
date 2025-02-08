@@ -12,12 +12,13 @@ fastapi = "^0.115.7"
 pgcli = "^4.1.0"
 requests = "^2.32.3"
 websockets = "^14.2"
+psycopg2-binary = "^2.9.10"
+python-json-logger = "^3.2.1"
 
 
 [tool.poetry.group.dev.dependencies]
 ipython = "^8.31.0"
 sqlacodegen = "3.0.0rc5"
-psycopg2 = "^2.9.10"
 
 [build-system]
 requires = ["poetry-core"]

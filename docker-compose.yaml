@@ -13,9 +13,9 @@ services:
     #   -c log_directory=/var/lib/postgresql/log
     #   -c log_filename=postgresql.log
     #   -c log_statement=all
-    volumes:
-      - ./pglog:/var/lib/postgresql/log
-      - ./pgdata:/var/lib/postgresql/data
+    # volumes:
+    #   - ./pglog:/var/lib/postgresql/log
+    #   - ./pgdata:/var/lib/postgresql/data
 
   # Jaeger
   jaeger-all-in-one:

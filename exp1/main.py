@@ -1,14 +1,26 @@
+import logging
 import uuid
 from enum import Enum
+from typing import Dict
 
 from dbos import DBOS, Queue, SetWorkflowID, WorkflowHandle, WorkflowStatus
 from fastapi import FastAPI
 from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse
+from pythonjsonlogger.json import JsonFormatter
 from sqlalchemy import insert, select
 from sqlalchemy.engine.cursor import CursorResult
 
-from exp.models import Accesses, Errors
+from .models import Accesses, Errors
+
+log_handler = logging.StreamHandler()
+formatter = JsonFormatter(
+    fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+    rename_fields={"levelname": "severity", "asctime": "timestamp"},
+)
+log_handler.setFormatter(formatter)
+
+DBOS.logger.handlers = [log_handler]
 
 
 class Status(str, Enum):
@@ -34,16 +46,16 @@ def process_task(task: dict):
     result: CursorResult = DBOS.sql_session.execute(
         insert(Accesses).values(user_id=task["user_id"], status=Status.requested)
     )
-    DBOS.logger.info(f"Workflow step transaction: {result.rowcount} rows inserted")
+    DBOS.logger.info(dict(message="Workflow step transaction", rows=result.rowcount))
 
 
 @DBOS.transaction()
-def process_error(error: str):
+def process_error(error: Dict[str, str]):
     DBOS.span.set_attribute("error", error)
     result: CursorResult = DBOS.sql_session.execute(
-        insert(Errors).values(message=str(error))
+        insert(Errors).values(message=error)
     )
-    DBOS.logger.error(f"Workflow error transaction: {result.rowcount} rows inserted")
+    DBOS.logger.error(dict(message="Workflow error transaction", rows=result.rowcount))
 
 
 @DBOS.workflow()
@@ -54,7 +66,7 @@ def process_tasks(tasks: dict):
     # Enqueue each task so all tasks are processed concurrently.
     for task in tasks:
         DBOS.span.set_attributes({"task": str(task)})
-        handle = queue.enqueue(process_task, dict(user_id=task))
+        handle: WorkflowHandle = queue.enqueue(process_task, dict(user_id=task))
         task_handles.append(handle)
     # Wait for each task to complete and retrieve its result.
     # Return the results of all tasks.
@@ -63,13 +75,29 @@ def process_tasks(tasks: dict):
             res = handle.get_result()
             DBOS.span.set_attribute("task_result", str(res))
         except Exception as e:
-            process_error(f"Task failed: {handle}::{e}")
-            DBOS.logger.error(f"Task failed: {handle}::{e}")
+            m = dict(
+                message="Task failed",
+                wf_id=handle.get_workflow_id(),
+                status=handle.get_status().status,
+            )
+            process_error(m | {"error": str(e)})
+            DBOS.logger.exception(m)
             continue
-        DBOS.logger.info(f"Got Task result: {res}")
+        DBOS.logger.info(
+            dict(
+                message="Task completed",
+                wf_id=handle.get_workflow_id(),
+                status=handle.get_status(),
+                result=res,
+            )
+        )
 
 
-@app.get("/submit")
+@app.post(
+    "/submit",
+    summary="Start a workflow",
+    description="Start a workflow with a list of user ids",
+)
 def fastapi_endpoint():
     DBOS.span.set_attribute("endpoint", "submit")
     wfid = str(uuid.uuid4())
@@ -107,14 +135,20 @@ def get_worflow_errors():
     return get_transaction_errors()
 
 
-@app.get("/errors")
+@app.get(
+    "/errors", summary="Get all errors", description="Get all errors from the database"
+)
 def get_errors():
     DBOS.span.set_attribute("endpoint", "errors")
     ret = get_worflow_errors()
     return JSONResponse(content=ret)
 
 
-@app.post("/batch/{count}")
+@app.post(
+    "/batch/{count}",
+    summary="Start a batch workflow",
+    description="Start a batch workflow with a list of user ids",
+)
 def batch_endpoint(count: int):
     DBOS.span.set_attributes({"endpoint": "batch", "count": count})
     wfid = str(uuid.uuid4())
