@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime
 from enum import Enum
 from typing import Dict, List
@@ -9,10 +10,19 @@ from fastapi.exceptions import HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from models import Accesses, Errors
+from pythonjsonlogger.json import JsonFormatter
 from sqlalchemy import insert, select, update
 from sqlalchemy.engine.cursor import CursorResult
 
-from exp.models import Accesses, Errors
+log_handler = logging.StreamHandler()
+formatter = JsonFormatter(
+    fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+    rename_fields={"levelname": "severity", "asctime": "timestamp"},
+)
+log_handler.setFormatter(formatter)
+
+DBOS.logger.handlers = [log_handler]
 
 
 class Status(str, Enum):
