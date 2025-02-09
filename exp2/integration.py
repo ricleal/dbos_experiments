@@ -6,6 +6,7 @@ I can't call transactions from a step, thus the 2nd workflow.
 import json
 import logging
 import os
+import sys
 import time
 import uuid
 from typing import Dict, List
@@ -17,7 +18,7 @@ from opentelemetry import trace
 from pythonjsonlogger.json import JsonFormatter
 from sqlalchemy import insert
 
-log_handler = logging.StreamHandler()
+log_handler = logging.StreamHandler(sys.stdout)
 formatter = JsonFormatter(
     fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
     rename_fields={"levelname": "severity", "asctime": "timestamp"},

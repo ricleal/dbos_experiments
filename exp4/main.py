@@ -1,5 +1,6 @@
 import json
 import logging
+import sys
 from datetime import datetime
 from enum import Enum
 from typing import Dict, List
@@ -15,7 +16,7 @@ from pythonjsonlogger.json import JsonFormatter
 from sqlalchemy import insert, select, update
 from sqlalchemy.engine.cursor import CursorResult
 
-log_handler = logging.StreamHandler()
+log_handler = logging.StreamHandler(sys.stdout)
 formatter = JsonFormatter(
     fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
     rename_fields={"levelname": "severity", "asctime": "timestamp"},

@@ -5,6 +5,7 @@ See the step transform_data, which raises an exception when the data is "task 50
 
 import logging
 import random
+import sys
 from typing import Any, Dict
 
 from dbos import DBOS, Queue
@@ -19,7 +20,7 @@ from opentelemetry.sdk.metrics.export import (
 from pythonjsonlogger.json import JsonFormatter
 from sqlalchemy import insert
 
-log_handler = logging.StreamHandler()
+log_handler = logging.StreamHandler(sys.stdout)
 formatter = JsonFormatter(
     fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
     rename_fields={"levelname": "severity", "asctime": "timestamp"},
