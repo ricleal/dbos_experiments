@@ -50,6 +50,8 @@ pgcli
 
 ### DBOS cloud cli
 
+Note that the DBOS Cloud only supports Python 3.11!!
+
 ```bash
 npm i -g @dbos-inc/dbos-cloud@latest
 
@@ -60,5 +62,7 @@ echo .dbos/credentials >> .gitignore
 poetry export --without-hashes --format=requirements.txt > requirements.txt
 
 dbos-cloud app deploy
+
+# Go to: https://ric-dbos_experiments.cloud.dbos.dev/
 ```
 

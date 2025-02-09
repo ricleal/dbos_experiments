@@ -5,9 +5,11 @@ from enum import Enum
 from typing import Dict
 
 from dbos import DBOS, Queue, SetWorkflowID, WorkflowHandle, WorkflowStatus
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pythonjsonlogger.json import JsonFormatter
 from sqlalchemy import insert, select
 from sqlalchemy.engine.cursor import CursorResult
@@ -32,6 +34,15 @@ class Status(str, Enum):
 
 
 app = FastAPI()
+
+app.mount(
+    "/static", StaticFiles(directory="static"), name="static"
+)  # Serve static files (like your HTML)
+templates = Jinja2Templates(
+    directory="templates"
+)  # Serve your HTML using Jinja2 Templates
+
+
 DBOS(fastapi=app)
 
 EVENT_KEY = "event_key"
@@ -94,6 +105,13 @@ def process_tasks(tasks: dict):
         )
 
 
+@app.get("/", response_class=HTMLResponse)
+async def read_root(request: Request):
+    return templates.TemplateResponse(
+        "index.html", {"request": request}
+    )  # Render the HTML template
+
+
 @app.post(
     "/submit",
     summary="Start a workflow",
@@ -118,7 +136,9 @@ def fastapi_endpoint():
     if not status:
         raise HTTPException(status_code=404, detail="workflow failed to start")
     return JSONResponse(
-        content=dict(event=event, wf_status=str(status), workflow_id=handle.workflow_id)
+        content=dict(
+            event=event, wf_status=status.__dict__, workflow_id=handle.workflow_id
+        )
     )
 
 
@@ -169,5 +189,7 @@ def batch_endpoint(count: int):
     if not status:
         raise HTTPException(status_code=404, detail="batch workflow failed to start")
     return JSONResponse(
-        content=dict(event=event, wf_status=str(status), workflow_id=handle.workflow_id)
+        content=dict(
+            event=event, wf_status=status.__dict__, workflow_id=handle.workflow_id
+        )
     )

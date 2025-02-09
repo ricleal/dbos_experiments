@@ -1,7 +1,9 @@
 import os
+import re
 from logging.config import fileConfig
 
 from alembic import context
+from dbos import get_dbos_database_url
 from sqlalchemy import engine_from_config, pool
 
 # this is the Alembic Config object, which provides
@@ -15,7 +17,18 @@ if config.config_file_name is not None:
 
 ## DB from env
 section = config.config_ini_section
-config.set_section_option(section, "POSTGRES_URL", os.environ.get("POSTGRES_URL"))
+# if the POSTGRES_URL is set in the environment, use that
+if os.environ.get("POSTGRES_URL"):
+    config.set_section_option(section, "POSTGRES_URL", os.environ.get("POSTGRES_URL"))
+else:
+    # we are on the cloud!!!
+    escaped_conn_string = re.sub(
+        r"%(?=[0-9A-Fa-f]{2})",
+        "%%",
+        get_dbos_database_url(),
+    )
+    config.set_section_option(section, "POSTGRES_URL", escaped_conn_string)
+
 
 # add your model's MetaData object here
 # for 'autogenerate' support
