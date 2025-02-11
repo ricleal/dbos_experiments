@@ -1,134 +1,268 @@
 <!DOCTYPE html>
 <html lang="en">
-
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>WebSocket Data Display</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"
-        integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
+    <link
+      rel="stylesheet"
+      href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
+    />
     <style>
-        .requested {
-            background-color: lightyellow;
-        }
+      .notification-container {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 1050;
+      }
 
-        .approved {
-            background-color: lightgreen;
-        }
+      .notification {
+        background-color: #f0f0f0;
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        margin-bottom: 10px;
+      }
 
-        .rejected {
-            background-color: lightcoral;
-        }
+      .table-responsive {
+        overflow-x: auto; /* Enable horizontal scrolling if needed */
+      }
 
-        .cancelled {
-            background-color: lightgray;
-        }
+      .table th {
+        cursor: pointer; /* Make header cells clickable for sorting */
+      }
 
-        #notification {
-            position: fixed;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            background-color: #f0f0f0;
-            padding: 10px 20px;
-            border-radius: 5px;
-            display: none;
-        }
+      .table-success {
+        background-color: #d4edda !important; /* Green for approved */
+      }
+
+      .table-danger {
+        background-color: #f8d7da !important; /* Red for rejected */
+      }
+
+      .table-secondary {
+        background-color: #e2e3e5 !important; /* Grey for cancelled */
+      }
     </style>
-</head>
+  </head>
 
-<body>
+  <body>
     <div class="container">
-        <h1>WebSocket Data</h1>
-        <table class="table" id="data-table">
-            <thead>
-                <tr>
-                    <th>User ID</th>
-                    <th>Status</th>
-                    <th>Action</th>
-                </tr>
-            </thead>
-            <tbody></tbody>
+      <h1>WebSocket Data</h1>
+      <div class="table-responsive">
+        <table class="table" id="dataTable">
+          <thead>
+            <tr>
+              <th data-col="access_request_id">Access Request ID</th>
+              <th data-col="access_id">Access ID</th>
+              <th data-col="access_description">Access Description</th>
+              <th data-col="user_id">User ID</th>
+              <th data-col="user_name">User Name</th>
+              <th data-col="access_request_status">Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
         </table>
-        <div id="notification"></div>
+      </div>
+
+      <div class="notification-container" id="notification-container"></div>
+
+      <h2>Request Access</h2>
+      <div class="mb-3">
+        <label for="userIdInput" class="form-label">User ID</label>
+        <input
+          type="text"
+          class="form-control"
+          id="userIdInput"
+          value="00000000-0000-0000-0000-000000000000"
+        />
+      </div>
+      <div class="mb-3">
+        <label for="accessIdInput" class="form-label">Access ID</label>
+        <input
+          type="text"
+          class="form-control"
+          id="accessIdInput"
+          value="00000000-0000-0000-0000-000000000000"
+        />
+      </div>
+      <button id="requestButton" class="btn btn-primary mt-3">
+        Request Access
+      </button>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"
-        integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL"
-        crossorigin="anonymous"></script>
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+
     <script>
-        const websocket = new WebSocket('ws://localhost:8000/ws/data');
-        const dataTable = document.getElementById('data-table').getElementsByTagName('tbody')[0];
-        const notificationDiv = document.getElementById('notification');
+      const websocket = new WebSocket("ws://localhost:8000/ws/data");
+      const dataTable = document
+        .getElementById("dataTable")
+        .getElementsByTagName("tbody")[0];
+      const requestButton = document.getElementById("requestButton");
+      const userIdInput = document.getElementById("userIdInput");
+      const accessIdInput = document.getElementById("accessIdInput");
 
-        websocket.onmessage = (event) => {
-            const message = JSON.parse(event.data);
-            const data = message.data;
+      let currentData = [];
+      let sortColumn = "access_request_created_at";
+      let sortOrder = "asc";
 
-            if (Array.isArray(data)) {
-                dataTable.innerHTML = ''; // Clear existing data
-                data.forEach(item => {
-                    const row = dataTable.insertRow();
-                    const userIdCell = row.insertCell();
-                    const statusCell = row.insertCell();
-                    const actionCell = row.insertCell();
+      function displayData(data) {
+        dataTable.innerHTML = ""; // Clear existing data
 
-                    userIdCell.textContent = item.user_id;
-                    statusCell.textContent = item.status;
+        currentData = data.sort((a, b) => {
+          // Sort data by access_request_created_at
+          const dateA = new Date(a.access_request_created_at);
+          const dateB = new Date(b.access_request_created_at);
+          return sortOrder === "asc" ? dateA - dateB : dateB - dateA;
+        });
 
-                    row.classList.add(item.status.toLowerCase());
+        currentData.forEach((item) => {
+          const row = dataTable.insertRow();
+          const status = item.access_request_status.toUpperCase();
+          const validStatuses = [
+            "REQUESTED",
+            "APPROVED",
+            "REJECTED",
+            "CANCELLED",
+          ];
 
-                    const approveButton = document.createElement('button');
-                    approveButton.textContent = 'Approve';
-                    approveButton.classList.add('btn', 'btn-success', 'me-2');
-                    approveButton.disabled = item.status !== 'REQUESTED';
-                    approveButton.onclick = () => sendApproval(item.user_id, 'APPROVED');
+          if (validStatuses.includes(status)) {
+            row.classList.add(
+              `table-${
+                status === "APPROVED"
+                  ? "success"
+                  : status === "REJECTED"
+                  ? "danger"
+                  : status === "CANCELLED"
+                  ? "secondary"
+                  : ""
+              }`
+            );
+          }
 
-                    const rejectButton = document.createElement('button');
-                    rejectButton.textContent = 'Reject';
-                    rejectButton.classList.add('btn', 'btn-danger');
-                    rejectButton.disabled = item.status !== 'REQUESTED';
-                    rejectButton.onclick = () => sendApproval(item.user_id, 'REJECTED');
+          const cell1 = row.insertCell();
+          const cell2 = row.insertCell();
+          const cell3 = row.insertCell();
+          const cell4 = row.insertCell();
+          const cell5 = row.insertCell();
+          const cell6 = row.insertCell();
+          const cell7 = row.insertCell();
 
-                    actionCell.appendChild(approveButton);
-                    actionCell.appendChild(rejectButton);
+          cell1.textContent = item.access_request_id;
+          cell2.textContent = item.access_id;
+          cell3.textContent = item.access_description;
+          cell4.textContent = item.user_id;
+          cell5.textContent = item.user_name;
+          cell6.textContent = status;
 
-                });
-            } else if (typeof data === 'string') {
-                showNotification(data);
-            }
-        };
+          const approveButton = document.createElement("button");
+          approveButton.textContent = "Approve";
+          approveButton.className = "btn btn-success btn-sm mr-2";
+          approveButton.dataset.accessRequestId = item.access_request_id;
+          approveButton.disabled = status !== "REQUESTED";
+          approveButton.addEventListener("click", () =>
+            handleApproval(item.access_request_id, "APPROVED")
+          );
 
+          const rejectButton = document.createElement("button");
+          rejectButton.textContent = "Reject";
+          rejectButton.className = "btn btn-danger btn-sm";
+          rejectButton.dataset.accessRequestId = item.access_request_id;
+          rejectButton.disabled = status !== "REQUESTED";
+          rejectButton.addEventListener("click", () =>
+            handleApproval(item.access_request_id, "REJECTED")
+          );
 
-        function sendApproval(userId, status) {
-          fetch('http://localhost:8000/api/approve', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ user_id: userId, status: status })
-          })
-          .then(response => {
+          cell7.appendChild(approveButton);
+          cell7.appendChild(rejectButton);
+        });
+      }
+
+      function displayNotification(message) {
+
+        const notificationContainer = document.getElementById('notification-container');
+
+        console.log("Notification:", message);
+        const notification = document.createElement("div");
+        notification.className = "notification";
+        notification.textContent = message;
+        // document.body.appendChild(notification);
+        
+        notificationContainer.appendChild(notification);
+
+        setTimeout(() => {
+          notification.remove();
+        }, 5000);
+      }
+
+      websocket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (Array.isArray(data.data)) {
+          displayData(data.data);
+        } else if (typeof data.data === "string") {
+          displayNotification(data.data);
+        }
+      };
+
+      function handleApproval(access_request_id, status) {
+        fetch("http://localhost:8000/api/approve", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            access_request_id: access_request_id,
+            status: status,
+          }),
+        })
+          .then((response) => {
             if (response.ok) {
-              console.log('Approval sent successfully');
-              // You might want to refresh the data here or handle the response accordingly.
+              console.log("Approval request sent successfully");
             } else {
-              console.error('Error sending approval:', response.status);
+              console.error("Error sending approval request");
             }
           })
-          .catch(error => {
-            console.error('Error sending approval:', error);
+          .catch((error) => {
+            console.error("Error sending approval request:", error);
           });
-        }
+      }
 
-        function showNotification(message) {
-            notificationDiv.textContent = message;
-            notificationDiv.style.display = 'block';
-            setTimeout(() => {
-                notificationDiv.style.display = 'none';
-            }, 5000);
-        }
+      requestButton.addEventListener("click", () => {
+        const userId = userIdInput.value;
+        const accessId = accessIdInput.value;
+
+        fetch(`http://localhost:8000/api/request/${userId}/${accessId}`, {
+          method: "POST",
+        })
+          .then((response) => {
+            if (response.ok) {
+              console.log("Request sent successfully");
+            } else {
+              console.error("Error sending request");
+            }
+          })
+          .catch((error) => {
+            console.error("Error sending request:", error);
+          });
+      });
+
+      // Sorting
+      const tableHeaders = document.querySelectorAll("#dataTable th");
+      tableHeaders.forEach((header) => {
+        header.addEventListener("click", () => {
+          const column = header.dataset.col;
+          if (column === sortColumn) {
+            sortOrder = sortOrder === "asc" ? "desc" : "asc";
+          } else {
+            sortColumn = column;
+            sortOrder = "asc";
+          }
+          displayData(currentData); // Re-render the table with the new sorting
+        });
+      });
     </script>
-</body>
-
+  </body>
 </html>

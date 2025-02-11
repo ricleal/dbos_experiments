@@ -10,6 +10,20 @@ class Base(DeclarativeBase):
     pass
 
 
+class Accesses(Base):
+    __tablename__ = 'accesses'
+    __table_args__ = (
+        PrimaryKeyConstraint('id', name='accesses_pkey'),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, server_default=text('gen_random_uuid()'))
+    description: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=text('now()'))
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=text('now()'))
+
+    access_requests: Mapped[List['AccessRequests']] = relationship('AccessRequests', back_populates='access')
+
+
 class Errors(Base):
     __tablename__ = 'errors'
     __table_args__ = (
@@ -34,20 +48,23 @@ class Users(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=text('now()'))
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=text('now()'))
 
-    accesses: Mapped[List['Accesses']] = relationship('Accesses', back_populates='user')
+    access_requests: Mapped[List['AccessRequests']] = relationship('AccessRequests', back_populates='user')
 
 
-class Accesses(Base):
-    __tablename__ = 'accesses'
+class AccessRequests(Base):
+    __tablename__ = 'access_requests'
     __table_args__ = (
-        ForeignKeyConstraint(['user_id'], ['users.id'], name='accesses_user_id_fkey'),
-        PrimaryKeyConstraint('id', name='accesses_pkey')
+        ForeignKeyConstraint(['access_id'], ['accesses.id'], name='access_requests_access_id_fkey'),
+        ForeignKeyConstraint(['user_id'], ['users.id'], name='access_requests_user_id_fkey'),
+        PrimaryKeyConstraint('id', name='access_requests_pkey')
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, server_default=text('gen_random_uuid()'))
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid)
+    access_id: Mapped[uuid.UUID] = mapped_column(Uuid)
     status: Mapped[str] = mapped_column(Enum('requested', 'approved', 'rejected', 'canceled', name='status'), server_default=text("'requested'::status"))
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=text('now()'))
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=text('now()'))
 
-    user: Mapped['Users'] = relationship('Users', back_populates='accesses')
+    access: Mapped['Accesses'] = relationship('Accesses', back_populates='access_requests')
+    user: Mapped['Users'] = relationship('Users', back_populates='access_requests')
