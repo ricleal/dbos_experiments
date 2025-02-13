@@ -48,7 +48,8 @@
 
   <body>
     <div class="container">
-      <h1>WebSocket Data</h1>
+      <h1>Access Requests</h1>
+      <p>Refreshed every 5 seconds - DBOS Scheduled workflow</p>
       <div class="table-responsive">
         <table class="table" id="dataTable">
           <thead>
@@ -75,7 +76,7 @@
           type="text"
           class="form-control"
           id="userIdInput"
-          value="00000000-0000-0000-0000-000000000000"
+          value="00000000-0000-0000-0000-000000000001"
         />
       </div>
       <div class="mb-3">
@@ -84,7 +85,7 @@
           type="text"
           class="form-control"
           id="accessIdInput"
-          value="00000000-0000-0000-0000-000000000000"
+          value="00000000-0000-0000-0000-000000000001"
         />
       </div>
       <button id="requestButton" class="btn btn-primary mt-3">
@@ -189,8 +190,24 @@
         const notification = document.createElement("div");
         notification.className = "notification";
         notification.textContent = message;
-        // document.body.appendChild(notification);
-        
+        if (message.startsWith("Slack")) {
+          const slackIcon = document.createElement("img");
+          slackIcon.src = "https://a.slack-edge.com/80588/marketing/img/icons/icon_slack_hash_colored.png";
+          slackIcon.alt = "Slack Icon";
+          slackIcon.style.width = "20px";
+          slackIcon.style.height = "20px";
+          slackIcon.style.marginRight = "5px";
+          notification.prepend(slackIcon);
+        }
+        if (message.startsWith("Email")) {
+          const emailIcon = document.createElement("img");
+          emailIcon.src = "https://upload.wikimedia.org/wikipedia/commons/4/4e/Gmail_Icon.png";
+          emailIcon.alt = "Email Icon";
+          emailIcon.style.width = "20px";
+          emailIcon.style.height = "20px";
+          emailIcon.style.marginRight = "5px";
+          notification.prepend(emailIcon);
+        }
         notificationContainer.appendChild(notification);
 
         setTimeout(() => {

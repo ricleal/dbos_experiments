@@ -123,7 +123,7 @@ def get_accesses(user_id: str = None) -> List[Accesses]:
         }
         for access in accesses
     ]
-    DBOS.logger.debug(dict(message="get_accesses", accesses=accesses_json))
+    DBOS.logger.debug(dict(message="get_accesses", len_accesses=len(accesses_json)))
     return accesses_json
 
 
@@ -166,7 +166,7 @@ async def send_notification(message: str):
 @DBOS.workflow()
 async def example_scheduled_workflow(scheduled_time: datetime, actual_time: datetime):
     accesses = get_accesses()
-    DBOS.logger.info(dict(message="Scheduled workflow", accesses=accesses))
+    DBOS.logger.info(dict(message="Scheduled workflow", len_accesses=len(accesses)))
 
     if len(connected_websockets) > 0:
         await send_data(connected_websockets[-1], accesses)
@@ -184,7 +184,7 @@ def process_access_request(access_id: str, user_id: str):
             send_notification, f"Slack: New access request received for user {user_id}"
         ),
         mail_queue.enqueue(
-            send_notification, f"Slack: New access request received for user {user_id}"
+            send_notification, f"Email: New access request received for user {user_id}"
         ),
     ]
     for handle in handles:
@@ -192,7 +192,7 @@ def process_access_request(access_id: str, user_id: str):
             result = handle.get_result()
             DBOS.logger.info(
                 dict(
-                    message="Workflow step completed",
+                    message="Workflow process_access_request completed",
                     access_id=access_id,
                     user_id=user_id,
                     result=result,
@@ -200,7 +200,7 @@ def process_access_request(access_id: str, user_id: str):
             )
         except Exception as e:
             d = dict(
-                message="Workflow step failed",
+                message="Workflow process_access_request failed",
                 access_id=access_id,
                 user_id=user_id,
             )
@@ -216,11 +216,11 @@ def process_approve_request(access_request_id: str, status: str):
         request_queue.enqueue(update_access, access_request_id, status),
         slack_queue.enqueue(
             send_notification,
-            f"Slack: Access request {status} for request {access_request_id}",
+            f"Slack: Access request '{status}' for ID: {access_request_id}",
         ),
         mail_queue.enqueue(
             send_notification,
-            f"Email: Access request {status} for request {access_request_id}",
+            f"Email: Access request '{status}' for ID: {access_request_id}",
         ),
     ]
     for handle in handles:
@@ -228,14 +228,14 @@ def process_approve_request(access_request_id: str, status: str):
             result = handle.get_result()
             DBOS.logger.info(
                 dict(
-                    message="Workflow step completed",
+                    message="Workflow process_approve_request completed",
                     access_request_id=access_request_id,
                     result=result,
                 )
             )
         except Exception as e:
             d = dict(
-                message="Workflow step failed",
+                message="Workflow process_approve_request failed",
                 access_request_id=access_request_id,
                 status=status,
             )
@@ -285,7 +285,6 @@ async def approve_request(request: Request):
     """Handles approval/rejection requests."""
     try:
         request_data = await request.json()
-        # {"access_request_id":"00000000-0000-0000-0000-000000000001","status":"APPROVED"}
         access_request_id = request_data.get("access_request_id")
         status = request_data.get("status").lower()
 
