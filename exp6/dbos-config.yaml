@@ -18,4 +18,4 @@ telemetry:
     logsEndpoint: http://localhost:4317/v1/logs
     tracesEndpoint: http://localhost:4317/v1/traces
   logs:
-    logLevel: DEBUG
+    logLevel: INFO
