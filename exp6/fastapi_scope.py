@@ -3,7 +3,10 @@ import logging
 import sys
 import time
 
-from dbos import DBOS
+from dbos import DBOS, WorkflowHandle, WorkflowStatus
+from fastapi import FastAPI
+from fastapi.exceptions import HTTPException
+from fastapi.responses import JSONResponse
 from pythonjsonlogger.json import JsonFormatter
 
 log_handler = logging.StreamHandler(sys.stdout)
@@ -14,14 +17,15 @@ formatter = JsonFormatter(
 log_handler.setFormatter(formatter)
 
 DBOS.logger.addHandler(log_handler)
-DBOS()
+
+
+app = FastAPI()
+DBOS(fastapi=app)
 
 
 logger = logging.getLogger("exp6")
 logger.setLevel(DBOS.logger.level)
 logger.addHandler(log_handler)
-
-DBOS.launch()
 
 app_name = "exp6-scope"
 
@@ -62,9 +66,35 @@ class A:
         logger.info(dict(message="Finished Workflow", app_name=app_name))
 
 
-if __name__ == "__main__":
+@app.post(
+    "/trigger_sync",
+    summary="Start a workflow",
+    description="Start a workflow",
+)
+def trigger_sync():
     logger.info(dict(message="Starting Main", app_name=app_name))
     A.workflow()
     logger.info(dict(message="Finished Main", app_name=app_name))
-    DBOS.destroy()
-    sys.exit(0)
+    return JSONResponse(content=dict(message="workflow ran successfully"))
+
+
+@DBOS.workflow()
+def start_async_workflow():
+    logger.info(dict(message="Starting Async Main", app_name=app_name))
+    A.workflow()
+    logger.info(dict(message="Finished Async Main", app_name=app_name))
+
+
+@app.post(
+    "/trigger_async",
+    summary="Start an Async workflow",
+    description="Start an Async workflow",
+)
+def trigger_async():
+    handle: WorkflowHandle = DBOS.start_workflow(start_async_workflow)
+    status: WorkflowStatus = handle.get_status()
+    if not status:
+        raise HTTPException(status_code=404, detail="workflow failed to start")
+    return JSONResponse(
+        content=dict(wf_status=status.__dict__, workflow_id=handle.workflow_id)
+    )

@@ -11,6 +11,7 @@ database:
   username: ${PGUSER}
   password: ${PGPASSWORD}
   app_db_name: ${PGDATABASE}
+  sys_db_name: dbos_history
   migrate:
     - alembic upgrade head
 telemetry:

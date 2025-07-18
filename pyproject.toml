@@ -8,7 +8,7 @@ package-mode = false
 
 [tool.poetry.dependencies]
 python = "~3.11"
-dbos = "^0.18.0"
+dbos = "^1.7.0"
 fastapi = "^0.115.7"
 pgcli = "^4.1.0"
 requests = "^2.32.3"
@@ -16,6 +16,7 @@ websockets = "^14.2"
 psycopg2-binary = "^2.9.10"
 python-json-logger = "^3.2.1"
 boto3 = "^1.36.23"
+opentelemetry-instrumentation = "^0.51b0"
 
 
 [tool.poetry.group.dev.dependencies]

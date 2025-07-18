@@ -1,18 +1,20 @@
 database:
-  hostname: ${PGHOST}
-  port: ${PGPORT}
-  username: ${PGUSER}
-  password: ${PGPASSWORD}
-  app_db_name: ${PGDATABASE}
+  app_db_name: dbos_exp
+  hostname: localhost
+  migrate:
+  - alembic upgrade head
+  password: dbos
+  port: 5432
+  username: postgres
 language: python
 name: dbos_experiments
 runtimeConfig:
   start:
-  # - python integration.py
-  - fastapi run fastapi_scope_shutdown.py --workers=5 
+  - python resume.py
 telemetry:
   OTLPExporter:
     logsEndpoint: http://localhost:4317/v1/logs
     tracesEndpoint: http://localhost:4317/v1/traces
   logs:
+    addContextMetadata: true
     logLevel: INFO
