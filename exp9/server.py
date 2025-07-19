@@ -1,4 +1,5 @@
 import os
+import signal
 import time
 import uuid
 from typing import Tuple
@@ -92,6 +93,22 @@ if __name__ == "__main__":
             ppid=os.getppid(),
         )
     )
+
+    # Signal handler for graceful shutdown
+    def signal_handler(signum, frame):
+        DBOS.logger.info(
+            dict(
+                message="Received signal, shutting down gracefully",
+                signal=signum,
+                pid=os.getpid(),
+            )
+        )
+        DBOS.destroy()
+        exit(0)
+
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
+    signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
 
     DBOS.launch()
 
