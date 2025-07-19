@@ -3,7 +3,7 @@ import os
 import random
 from typing import List, Tuple
 
-from dbos import DBOSClient, EnqueueOptions
+from dbos import DBOSClient, EnqueueOptions, WorkflowHandleAsync
 
 
 async def main():
@@ -15,7 +15,7 @@ async def main():
     print(f"Client started with PID: {os.getpid()}")
 
     # Generate random fibonacci numbers to calculate
-    fibonacci_numbers = [random.randint(25, 40) for _ in range(5)]
+    fibonacci_numbers = [random.randint(35, 40) for _ in range(5)]
 
     print(f"Requesting fibonacci calculations for: {fibonacci_numbers}")
 
@@ -34,18 +34,28 @@ async def main():
         workflow_handles.append((n, handle))
         print(f"Started workflow {handle.workflow_id} for fibonacci({n})")
 
-    # Wait for all results
+    # Wait for all results - process them as they complete
     results: List[Tuple[int, int, float]] = []
-    for original_n, handle in workflow_handles:
-        print(
-            f"Waiting for result of fibonacci({original_n}) from workflow {handle.workflow_id}"
-        )
 
+    # Create async tasks for getting results
+    async def get_result_with_context(original_n: int, handle: WorkflowHandleAsync):
         result = await handle.get_result()
+        return original_n, handle.workflow_id, result
+
+    tasks = [
+        get_result_with_context(original_n, handle)
+        for original_n, handle in workflow_handles
+    ]
+
+    # Process results as they complete
+    for task in asyncio.as_completed(tasks):
+        original_n, workflow_id, result = await task
         results.append(result)
 
         n, fib_result, duration = result
-        print(f"Received result: fibonacci({n}) = {fib_result} (took {duration:.3f}s)")
+        print(
+            f"✅ Completed: fibonacci({n}) = {fib_result} (took {duration:.3f}s) [workflow {workflow_id}]"
+        )
 
     # Display summary
     print("\n=== Summary ===")
