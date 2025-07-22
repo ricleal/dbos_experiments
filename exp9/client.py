@@ -29,7 +29,7 @@ async def main():
     for n in fibonacci_numbers:
         print(f"Starting fibonacci calculation for n={n}")
 
-        handle = await client.enqueue_async(options, n)
+        handle = await client.enqueue_async(options, n=n)
 
         workflow_handles.append((n, handle))
         print(f"Started workflow {handle.workflow_id} for fibonacci({n})")

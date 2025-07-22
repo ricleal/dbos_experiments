@@ -8,17 +8,28 @@ This experiment demonstrates a DBOS-based fibonacci calculator with client-serve
 
 ## Files
 
-- `server.py` - DBOS server that processes fibonacci calculations
+- `server.py` - Single-process DBOS server that processes fibonacci calculations
+- `server2.py` - Multi-process DBOS server with separate health and workflow processes
 - `client.py` - Client that enqueues fibonacci calculation requests
 - `README.md` - This documentation file
 - `image.png` - Architecture diagram
 
 ## Usage
 
+### Single Process Server
 1. Start the server:
    ```bash
    python server.py
    ```
+
+### Multi Process Server (with Health Check)
+1. Start the multi-process server:
+   ```bash
+   python server2.py
+   ```
+   This will start:
+   - Health server on http://localhost:8080/health
+   - Fibonacci workflow server
 
 2. In another terminal, run the client:
    ```bash
@@ -33,3 +44,7 @@ The client will generate random fibonacci numbers and show results as they compl
 - Graceful shutdown with signal handling
 - Real-time result display as workflows complete
 - Comprehensive logging with process information
+- **Multi-process architecture** (server2.py):
+  - Separate health check server for monitoring
+  - Independent fibonacci workflow processing
+  - Better resource isolation and fault tolerance
