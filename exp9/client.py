@@ -1,6 +1,5 @@
 import asyncio
 import os
-import random
 from typing import List, Tuple
 
 from dbos import DBOSClient, EnqueueOptions, WorkflowHandleAsync
@@ -15,7 +14,9 @@ async def main():
     print(f"Client started with PID: {os.getpid()}")
 
     # Generate random fibonacci numbers to calculate
-    fibonacci_numbers = [random.randint(35, 40) for _ in range(5)]
+    # fibonacci_numbers = [random.randint(30, 50) for _ in range(10)]
+    # fibonacci_numbers = list(range(35, 41))  # Example range, can be adjusted
+    fibonacci_numbers = [35]
 
     print(f"Requesting fibonacci calculations for: {fibonacci_numbers}")
 
