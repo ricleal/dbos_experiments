@@ -16,7 +16,7 @@ async def main():
     # Generate random fibonacci numbers to calculate
     # fibonacci_numbers = [random.randint(30, 50) for _ in range(10)]
     # fibonacci_numbers = list(range(35, 41))  # Example range, can be adjusted
-    fibonacci_numbers = [35]
+    fibonacci_numbers = [100]
 
     print(f"Requesting fibonacci calculations for: {fibonacci_numbers}")
 
