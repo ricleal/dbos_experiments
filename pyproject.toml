@@ -17,6 +17,7 @@ psycopg2-binary = "^2.9.10"
 python-json-logger = "^3.2.1"
 boto3 = "^1.36.23"
 opentelemetry-instrumentation = "^0.51b0"
+faker = "^37.4.2"
 
 
 [tool.poetry.group.dev.dependencies]
