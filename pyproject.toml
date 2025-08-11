@@ -23,6 +23,7 @@ faker = "^37.4.2"
 [tool.poetry.group.dev.dependencies]
 ipython = "^8.31.0"
 sqlacodegen = "3.0.0rc5"
+pytest = "^8.4.1"
 
 [build-system]
 requires = ["poetry-core"]
