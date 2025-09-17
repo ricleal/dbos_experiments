@@ -157,6 +157,70 @@ python ex3.py
 
 ---
 
+## Example 4: Proper Step Design for Database Operations (`ex4.py`)
+
+### Purpose
+Demonstrates the **correct approach** for designing steps that work with database operations, avoiding the issues shown in Example 2.
+
+### Key Features
+- **Separated concerns**: Steps only generate data, workflows handle database operations
+- **Proper retry handling**: No unique constraint violations during workflow retries
+- **Crash recovery**: Similar to ex3 but with better step design
+- **✅ Best practice implementation**: Shows how to properly structure steps and workflows
+
+### Critical Design Decision
+This example implements the **recommended pattern** where:
+
+```python
+# ✅ CORRECT: Step only generates data
+@DBOS.step(retries_allowed=True)
+def users(page: int) -> List[User]:
+    user_list: List[User] = get_fake_users(seed=page, size=10)
+    return user_list
+
+# ✅ CORRECT: Workflow handles database operations
+@DBOS.workflow(max_recovery_attempts=3)
+def users_workflow() -> int:
+    user_list = users(page=1)  # Step: generate data
+    insert_users_page(user_list, DBOS.workflow_id, analyzed_at)  # Workflow: write to DB
+```
+
+### Why This Approach Works
+- **The workflow step only generates users, and the insertion is done in the workflow**
+- **The analyzed_at date is different for each retry of the workflow, although the workflow_id is the same**
+- **This means that the combination of (user.id, workflow_id, analyzed_at) is always unique**
+- **So no UNIQUE constraint violations will occur**
+
+### Workflow Flow
+1. Check for existing pending workflows (same smart logic as ex3)
+2. Generate first batch of users (step)
+3. Insert users to database (workflow)
+4. **Simulate random crash** (50% chance)
+5. Generate second batch of users (step)
+6. Insert users to database (workflow)
+7. Return total user count
+
+### Comparison with Example 2
+| Aspect | Example 2 (❌ Problematic) | Example 4 (✅ Correct) |
+|--------|---------------------------|------------------------|
+| Step responsibility | Generate + Insert data | Generate data only |
+| Database operations | In step | In workflow |
+| Retry behavior | Fails with constraint violation | Works correctly |
+| Data uniqueness | Same analyzed_at on retry | New analyzed_at on retry |
+
+### Usage
+```bash
+python ex4.py
+```
+
+### Learning Points
+- **✅ Proper separation of concerns** between steps and workflows
+- How workflow-level operations handle retries differently than step-level operations
+- Why database writes should typically be done in workflows, not steps
+- Understanding how DBOS handles workflow vs step recovery
+
+---
+
 ## Running the Examples
 
 ### Prerequisites
@@ -172,8 +236,9 @@ export DBOS_DATABASE_URL="postgresql://trustle:trustle@localhost:5432/test?sslmo
 
 ### Execution Order
 1. Start with `ex1.py` to understand basic concepts
-2. Run `ex2.py` to see error handling and retries
-3. Run `ex3.py` multiple times to observe crash recovery behavior
+2. Run `ex2.py` to see error handling and retries (⚠️ problematic pattern)
+3. Run `ex4.py` to see the correct approach for step design
+4. Run `ex3.py` multiple times to observe crash recovery behavior
 
 ## Key DBOS Concepts Demonstrated
 
