@@ -1,0 +1,200 @@
+# Experiment 13: DBOS Workflow Examples with User Data Management
+
+This folder contains three examples demonstrating different aspects of DBOS workflows for user data management and processing. All examples use a common data model and database setup to showcase various DBOS features including steps, workflows, error handling, and workflow recovery.
+
+## Common Components
+
+### Data Model (`data.py`)
+- **`User` dataclass**: Represents a user with `id`, `external_id`, and `name`
+- **`generate_fake_users()`**: Generates fake user data using Faker library
+- **Unique ID generation**: Uses UUID5 to create deterministic UUIDs based on external_id and name
+
+### Database Layer (`db.py`)
+- **SQLite database** with a `users` table
+- **Extended data model**: Adds `workflow_id`, `analyzed_at`, and `created_at` fields
+- **Batch insertion**: Efficient insertion of user pages
+- **Unique constraints**: Prevents duplicate entries based on `id`, `workflow_id`, and `analyzed_at`
+
+## Example 1: Basic DBOS Workflow (`ex1.py`)
+
+### Purpose
+Demonstrates a simple, reliable DBOS workflow that processes user data in batches.
+
+### Key Features
+- **Basic workflow structure**: Simple step-based processing
+- **Idempotent operations**: Can be run multiple times safely
+- **Database truncation**: Starts with a clean database each run
+- **Batch processing**: Processes users in pages of 10
+
+### Workflow Flow
+1. Create/truncate database
+2. Generate and insert first batch of users (page 0)
+3. Generate and insert second batch of users (page 1)
+4. Return total user count
+
+### Usage
+```bash
+python ex1.py
+```
+
+### Learning Points
+- Basic DBOS workflow and step definitions
+- Database integration with workflows
+- Logging and monitoring workflow execution
+
+---
+
+## Example 2: Error Handling and Step Retries (`ex2.py`)
+
+### Purpose
+Demonstrates DBOS's automatic retry mechanism for handling transient errors in steps.
+
+### Key Features
+- **Step retries**: `@DBOS.step(retries_allowed=True)` enables automatic retries
+- **Simulated failures**: Artificially fails on early attempts to show retry behavior
+- **Database constraints**: Uses unique constraints to prevent duplicate data insertion
+- **Error simulation**: Throws `ValueError` on non-final attempts
+- **⚠️ Step composition issue**: Demonstrates why steps should NOT combine data generation + database writing
+
+### Important Design Consideration
+This example intentionally shows a **problematic pattern** where a single step combines:
+1. Data generation (`get_fake_users()`)
+2. Database insertion (`insert_users_page()`)
+
+When the step fails after the database insertion and DBOS retries it, the retry will fail with:
+```
+sqlite3.IntegrityError: UNIQUE constraint failed: users.id, users.workflow_id, users.analyzed_at
+```
+
+**Best Practice**: Steps should be atomic and idempotent. For database operations, either:
+- Use separate steps for data generation and insertion
+- Design database operations to be truly idempotent (e.g., using `INSERT OR REPLACE`)
+- Handle unique constraint violations gracefully within the step
+
+### Workflow Flow
+1. Create/truncate database
+2. For each page (0, 1):
+   - Generate users
+   - Insert into database
+   - Simulate error (except on final retry attempt)
+   - DBOS automatically retries on failure
+3. Return total user count
+
+### Error Handling Logic
+```python
+# Fails on all attempts except the last one
+if DBOS.step_status.current_attempt < DBOS.step_status.max_attempts - 1:
+    raise ValueError(f"Simulated error on attempt {DBOS.step_status.current_attempt}")
+```
+
+### Usage
+```bash
+python ex2.py
+```
+
+### Learning Points
+- Step-level error handling and retries
+- Accessing step status information
+- Designing idempotent operations for retry scenarios
+- **⚠️ Critical lesson**: Why combining data generation + database writing in a single step is problematic
+- Understanding unique constraint violations during retries
+
+---
+
+## Example 3: Workflow Recovery and Management (`ex3.py`)
+
+### Purpose
+Demonstrates DBOS's workflow recovery capabilities and workflow management features when facing catastrophic failures.
+
+### Key Features
+- **Workflow recovery**: `max_recovery_attempts=3` allows workflow to recover from crashes
+- **Simulated crashes**: Uses `ctypes.string_at(0)` to simulate out-of-memory errors
+- **Workflow detection**: Checks for existing pending workflows before starting new ones
+- **Smart restart logic**: Waits for pending workflows and decides whether to resume or start fresh
+
+### Workflow Flow
+1. Check for existing pending workflows
+2. If pending workflows exist:
+   - Wait 5 seconds for potential completion
+   - Resume existing workflow or start new one based on status
+3. If no pending workflows: start new workflow
+4. Execute workflow:
+   - Create/truncate database
+   - Insert first batch of users
+   - **Simulate random crash** (50% chance)
+   - Insert second batch of users (after recovery)
+   - Return total user count
+
+### Crash Simulation
+```python
+# 50% chance of simulating an out-of-memory error
+if random.random() < 0.5:
+    import ctypes
+    ctypes.string_at(0)  # Causes segmentation fault
+```
+
+### Workflow Management Logic
+```python
+# Check for pending workflows
+pending_workflows = DBOS.list_workflows(status=["PENDING", "ENQUEUED"], name="users_workflow")
+
+if pending_workflows:
+    # Wait and check again
+    time.sleep(5)
+    # Resume existing or start new based on updated status
+```
+
+### Usage
+```bash
+python ex3.py
+```
+
+### Learning Points
+- Workflow recovery from catastrophic failures
+- Workflow status management and querying
+- Intelligent workflow restart logic
+- Handling process crashes and restarts
+
+---
+
+## Running the Examples
+
+### Prerequisites
+1. **PostgreSQL database** running on `localhost:5432`
+2. **Database**: `test` with user `trustle:trustle`
+3. **Python dependencies**: Install using `pip install dbos faker`
+
+### Environment Variables
+Set the database URL (optional):
+```bash
+export DBOS_DATABASE_URL="postgresql://trustle:trustle@localhost:5432/test?sslmode=disable"
+```
+
+### Execution Order
+1. Start with `ex1.py` to understand basic concepts
+2. Run `ex2.py` to see error handling and retries
+3. Run `ex3.py` multiple times to observe crash recovery behavior
+
+## Key DBOS Concepts Demonstrated
+
+### Workflows
+- Durable execution that survives process crashes
+- Automatic recovery from the last completed step
+- Workflow status tracking and management
+
+### Steps
+- Atomic operations within workflows
+- Automatic retry mechanisms for transient failures
+- Idempotent design patterns
+
+### Error Handling
+- Step-level retries with exponential backoff
+- Workflow-level recovery attempts
+- Graceful handling of various failure scenarios
+
+### Database Integration
+- Transaction management within steps
+- Data consistency across workflow executions
+- Unique constraints for preventing duplicates
+
+This experiment series provides a comprehensive introduction to building resilient, distributed applications with DBOS.

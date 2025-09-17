@@ -28,12 +28,16 @@ def my_sub_workflow():
     r = my_transaction()
     DBOS.logger.info(f"my_transaction() returned: {r}")
     DBOS.logger.info("Finishing my_sub_workflow")
+    ##  Apparently we have access to DBOS.sql_session
+    DBOS.sleep(2)
+    # result = DBOS.sql_session.execute(text("SELECT current_database(), current_user;"))
+    # DBOS.logger.info(f"DBOS.sql_session returned: {result.fetchone()}")
 
 
 @DBOS.workflow()
 def my_workflow():
     DBOS.logger.info("Starting my_workflow")
-    my_step()
+    # my_step()
     my_sub_workflow()
     DBOS.logger.info("Finishing my_workflow")
 
@@ -46,7 +50,7 @@ if __name__ == "__main__":
             "postgresql://trustle:trustle@localhost:5432/test?sslmode=disable",
         ),
     }
-    DBOS(config=config)
+    DBOS(config=config, conductor_key="supersecret")
     DBOS.launch()
     # Start the background task
     handle: WorkflowHandle = DBOS.start_workflow(my_workflow)
