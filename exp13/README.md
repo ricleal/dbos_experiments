@@ -47,7 +47,7 @@ python ex1.py
 ## Example 2: Error Handling and Step Retries (`ex2.py`)
 
 ### Purpose
-Demonstrates DBOS's automatic retry mechanism for handling transient errors in steps.
+Demonstrates DBOS's automatic retry mechanism for handling transient errors in steps, while showing a **problematic pattern** that should be avoided.
 
 ### Key Features
 - **Step retries**: `@DBOS.step(retries_allowed=True)` enables automatic retries
@@ -55,6 +55,25 @@ Demonstrates DBOS's automatic retry mechanism for handling transient errors in s
 - **Database constraints**: Uses unique constraints to prevent duplicate data insertion
 - **Error simulation**: Throws `ValueError` on non-final attempts
 - **⚠️ Step composition issue**: Demonstrates why steps should NOT combine data generation + database writing
+
+### The Problem This Example Reveals
+This example **doesn't work** by design to teach an important lesson:
+
+```python
+# ❌ PROBLEMATIC: Step combines generation + insertion
+@DBOS.step(retries_allowed=True)
+def users(page: int, workflow_id: str, analyzed_at: datetime) -> bool:
+    user_list = get_fake_users(seed=page, size=10)  # Generate users
+    insert_users_page(user_list, workflow_id, analyzed_at)  # Insert to DB
+    # Simulate error after insert...
+    raise ValueError("Simulated error")  # Step will be retried
+```
+
+**Why it fails**:
+- **This doesn't work. A step is 2 operations: generate users and insert them into the DB**
+- **I simulate an error after the insert, so the step can be retried**
+- **However, on retry, the same users are generated and we try to insert them again**
+- **Causing a UNIQUE constraint violation in the DB**
 
 ### Important Design Consideration
 This example intentionally shows a **problematic pattern** where a single step combines:

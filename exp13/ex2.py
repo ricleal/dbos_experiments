@@ -10,7 +10,10 @@ from db import (
 )
 from dbos import DBOS, DBOSConfig, WorkflowHandle
 
-# This is all working
+# This is doesn't work. A step is 2 operations: generate users and insert them into the DB.
+# I simulate an error after the insert, so the step can be retried.
+# However, on retry, the same users are generated and we try to insert them again,
+# causing a UNIQUE constraint violation in the DB.
 
 analyzed_at = datetime.now(timezone.utc)
 
