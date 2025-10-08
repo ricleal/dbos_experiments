@@ -24,7 +24,7 @@ analyzed_at = datetime.now(timezone.utc)
 
 @DBOS.step(retries_allowed=True)
 def users(page: int) -> List[User]:
-    DBOS.logger.info("Step: Inserting users into the database")
+    DBOS.logger.info("Step: Get simulated users from fake API")
     user_list: List[User] = get_fake_users(seed=page, size=10)
     DBOS.logger.info("Step: Users generated successfully")
     return user_list

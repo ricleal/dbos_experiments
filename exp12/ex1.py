@@ -3,6 +3,8 @@ from typing import List
 
 from dbos import DBOS, DBOSConfig, WorkflowHandle
 
+# EXample with tests in test_ex1.py
+
 
 @DBOS.step(retries_allowed=True)
 def success_step() -> bool:

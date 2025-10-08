@@ -3,9 +3,12 @@ import os
 from dbos import DBOS, DBOSConfig, WorkflowHandle
 from sqlalchemy import text
 
+# Note that: AssertionError: db is only available within a transaction.
+
 
 @DBOS.transaction()
 def my_transaction():
+    DBOS.logger.info("Executing my_transaction")
     result = DBOS.sql_session.execute(text("SELECT current_database(), current_user;"))
     return result.fetchone()
 
@@ -27,11 +30,8 @@ def my_sub_workflow():
     DBOS.logger.info("Starting my_sub_workflow")
     r = my_transaction()
     DBOS.logger.info(f"my_transaction() returned: {r}")
+    my_step()
     DBOS.logger.info("Finishing my_sub_workflow")
-    ##  Apparently we have access to DBOS.sql_session
-    DBOS.sleep(2)
-    # result = DBOS.sql_session.execute(text("SELECT current_database(), current_user;"))
-    # DBOS.logger.info(f"DBOS.sql_session returned: {result.fetchone()}")
 
 
 @DBOS.workflow()
@@ -50,7 +50,7 @@ if __name__ == "__main__":
             "postgresql://trustle:trustle@localhost:5432/test?sslmode=disable",
         ),
     }
-    DBOS(config=config, conductor_key="supersecret")
+    DBOS(config=config)
     DBOS.launch()
     # Start the background task
     handle: WorkflowHandle = DBOS.start_workflow(my_workflow)

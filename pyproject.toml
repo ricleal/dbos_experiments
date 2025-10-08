@@ -7,8 +7,8 @@ readme = "README.md"
 package-mode = false
 
 [tool.poetry.dependencies]
-python = "~3.12"
-dbos = "^1.7.0"
+python = "^3.12"
+dbos = "^2.1.0"
 fastapi = "^0.115.7"
 pgcli = "^4.1.0"
 requests = "^2.32.3"

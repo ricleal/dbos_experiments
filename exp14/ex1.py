@@ -4,6 +4,9 @@ from time import sleep
 from dbos import DBOS, DBOSConfig, WorkflowHandle
 from dbos._error import DBOSMaxStepRetriesExceeded
 
+# Example of using the DBOSMaxStepRetriesExceeded exception in a workflow
+# The step will fail after exhausting its retries and the workflow will catch the exception.
+
 
 @DBOS.step(retries_allowed=True)
 def provision_step():
