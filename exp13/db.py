@@ -36,13 +36,13 @@ def create_database(db_path: str = "user.db", truncate: bool = False) -> None:
     # Create the users table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
+            id TEXT NOT NULL,
             external_id TEXT NOT NULL,
             name TEXT NOT NULL,
-            workflow_id TEXT,
-            analyzed_at TEXT,
+            workflow_id TEXT NOT NULL,
+            analyzed_at TEXT NOT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(id, workflow_id, analyzed_at)
+            PRIMARY KEY (id, workflow_id, analyzed_at)
         )
     """)
 
@@ -132,6 +132,27 @@ def get_user_count(db_path: str = "data.db") -> int:
     cursor = conn.cursor()
 
     cursor.execute("SELECT COUNT(*) FROM users")
+    count = cursor.fetchone()[0]
+
+    conn.close()
+    return count
+
+
+def get_most_recent_user_count(db_path: str = "data.db") -> int:
+    """Get the count of records with the most recent analyzed_at timestamp."""
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT MAX(analyzed_at) FROM users")
+    most_recent_analyzed_at = cursor.fetchone()[0]
+
+    if most_recent_analyzed_at is None:
+        conn.close()
+        return 0
+
+    cursor.execute(
+        "SELECT COUNT(*) FROM users WHERE analyzed_at = ?", (most_recent_analyzed_at,)
+    )
     count = cursor.fetchone()[0]
 
     conn.close()
