@@ -42,7 +42,7 @@ def create_database(db_path: str = "user.db", truncate: bool = False) -> None:
             workflow_id TEXT NOT NULL,
             analyzed_at TEXT NOT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (id, workflow_id, analyzed_at)
+            PRIMARY KEY (id, workflow_id, analyzed_at, created_at)
         )
     """)
 
@@ -139,20 +139,39 @@ def get_user_count(db_path: str = "data.db") -> int:
 
 
 def get_most_recent_user_count(db_path: str = "data.db") -> int:
-    """Get the count of records with the most recent analyzed_at timestamp."""
+    """Get the count of records with the most recent analyzed_at timestamp.
+
+    If duplicates exist (same id, workflow_id, analyzed_at), only count the one
+    with the most recent created_at timestamp.
+    """
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    cursor.execute("SELECT MAX(analyzed_at) FROM users")
-    most_recent_analyzed_at = cursor.fetchone()[0]
+    query = """
+        WITH ranked_users AS (
+            SELECT 
+                id,
+                workflow_id,
+                analyzed_at,
+                created_at,
+                ROW_NUMBER() OVER (
+                    PARTITION BY id, workflow_id, analyzed_at 
+                    ORDER BY created_at DESC
+                ) as rn
+            FROM users
+        ),
+        most_recent_analysis AS (
+            SELECT MAX(analyzed_at) as max_analyzed_at
+            FROM ranked_users
+            WHERE rn = 1
+        )
+        SELECT COUNT(*)
+        FROM ranked_users
+        WHERE rn = 1 
+        AND analyzed_at = (SELECT max_analyzed_at FROM most_recent_analysis)
+    """
 
-    if most_recent_analyzed_at is None:
-        conn.close()
-        return 0
-
-    cursor.execute(
-        "SELECT COUNT(*) FROM users WHERE analyzed_at = ?", (most_recent_analyzed_at,)
-    )
+    cursor.execute(query)
     count = cursor.fetchone()[0]
 
     conn.close()

@@ -5,6 +5,10 @@ from dbos import DBOS, DBOSConfig, WorkflowHandle
 
 # Example of measure payload size in a workflow
 # A step is called with a payload of increasing size (10^0 to 10^6 bytes)
+# we test a step which batches all payloads in a single call versus
+# a step which is called multiple times with smaller payloads
+# to see the performance difference.
+#
 
 MAX_SIZE = 7  # Up to 10^7 bytes (10 MB)
 
