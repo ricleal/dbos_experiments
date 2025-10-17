@@ -41,7 +41,7 @@ def create_database(db_path: str = "user.db", truncate: bool = False) -> None:
             name TEXT NOT NULL,
             workflow_id TEXT NOT NULL,
             analyzed_at TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            created_at DATETIME DEFAULT(datetime('subsec')),
             PRIMARY KEY (id, workflow_id, analyzed_at, created_at)
         )
     """)
@@ -138,40 +138,53 @@ def get_user_count(db_path: str = "data.db") -> int:
     return count
 
 
-def get_most_recent_user_count(db_path: str = "data.db") -> int:
-    """Get the count of records with the most recent analyzed_at timestamp.
+def get_most_recent_user_count(
+    db_path: str = "data.db", workflow_id: str = None
+) -> int:
+    """Get the count of unique users for a specific workflow (or the most recent workflow).
 
-    If duplicates exist (same id, workflow_id, analyzed_at), only count the one
-    with the most recent created_at timestamp.
+    If duplicates exist (same id within a workflow), only count the one with the most
+    recent created_at timestamp. This handles both:
+    1. Step retries - multiple insertions with different created_at
+    2. Workflow crashes/recovery - multiple insertions across workflow recoveries
+
+    Args:
+        db_path: Path to the SQLite database file
+        workflow_id: Optional workflow ID. If None, uses the most recent workflow.
     """
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
+
+    if workflow_id is None:
+        # Get the most recent workflow_id
+        cursor.execute(
+            "SELECT workflow_id FROM users ORDER BY analyzed_at DESC LIMIT 1"
+        )
+        result = cursor.fetchone()
+        if result is None:
+            conn.close()
+            return 0
+        workflow_id = result[0]
 
     query = """
         WITH ranked_users AS (
             SELECT 
                 id,
                 workflow_id,
-                analyzed_at,
                 created_at,
                 ROW_NUMBER() OVER (
-                    PARTITION BY id, workflow_id, analyzed_at 
+                    PARTITION BY id, workflow_id
                     ORDER BY created_at DESC
                 ) as rn
             FROM users
-        ),
-        most_recent_analysis AS (
-            SELECT MAX(analyzed_at) as max_analyzed_at
-            FROM ranked_users
-            WHERE rn = 1
+            WHERE workflow_id = ?
         )
         SELECT COUNT(*)
         FROM ranked_users
-        WHERE rn = 1 
-        AND analyzed_at = (SELECT max_analyzed_at FROM most_recent_analysis)
+        WHERE rn = 1
     """
 
-    cursor.execute(query)
+    cursor.execute(query, (workflow_id,))
     count = cursor.fetchone()[0]
 
     conn.close()
