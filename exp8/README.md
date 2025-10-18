@@ -1,63 +1,58 @@
-# Experiment 8
+# Experiment 8: DBOS Workflows vs Python Multiprocessing Performance Comparison
 
-## Summary
+This experiment explores the parallelization capabilities of DBOS workflows and compares them with traditional Python multiprocessing. The goal is to understand how DBOS handles CPU-intensive tasks and whether it can bypass Python's Global Interpreter Lock (GIL) limitations.
 
-This experiment explores parallel processing approaches in DBOS, comparing DBOS queues with traditional Python multiprocessing. It demonstrates different concurrency patterns and their performance characteristics for CPU-intensive tasks.
+## Files
 
-## Files Description
+### 1. `main.py` - DBOS Async Workflows with Queues
+Demonstrates DBOS workflows running CPU-intensive tasks (Fibonacci calculations) using:
+- **Async workflows** with `@DBOS.workflow()` decorator
+- **Queue-based concurrency** with configurable limits (`concurrency=10`, `worker_concurrency=5`)
+- Process monitoring (logs PID/PPID for each workflow)
 
-### Core Application Files
+**Key Finding**: All workflows run in the **same process** (single PID), limited by Python's GIL. While DBOS provides durable execution and resilience, it doesn't create separate processes for true parallel CPU-bound workloads.
 
-- **`main.py`** - DBOS queue-based parallel processing:
-  - **DBOS Queue Configuration**: Queue with 10 concurrency and 5 worker concurrency
-  - **Fibonacci Computation**: CPU-intensive task for performance testing
-  - **Workflow Execution**: Parallel workflows executed through DBOS queues
-  - **Process Tracking**: Detailed logging of process IDs (PID/PPID) and execution times
-  - **Performance Monitoring**: Duration tracking for each workflow execution
-  - **DBOS Integration**: Full DBOS lifecycle with database connection and workflow management
-  - **Concurrency Control**: Managed parallelism through DBOS queue system
+### 2. `exp_multip.py` - Standard Python Multiprocessing Baseline
+Pure Python multiprocessing implementation using `Pool(10)` to compute Fibonacci numbers:
+- Creates **separate processes** (different PIDs) for true parallelism
+- Bypasses the GIL for CPU-intensive calculations
+- Serves as a performance baseline for comparison
 
-- **`exp_multip.py`** - Traditional Python multiprocessing baseline:
-  - **Native Multiprocessing**: Uses Python's `multiprocessing.Pool` with 10 workers
-  - **Fibonacci Computation**: Same CPU-intensive task for fair comparison
-  - **Performance Baseline**: Demonstrates traditional parallel processing approach
-  - **Process Tracking**: Similar logging for process IDs and execution times
-  - **No DBOS Overhead**: Pure Python multiprocessing without database or workflow overhead
+**Key Finding**: Shows significantly better performance for CPU-bound tasks due to actual parallel execution across multiple cores.
 
-- **`hybrid_dbos_multiprocessing.py`** - Hybrid approach combining both:
-  - **DBOS Steps with Multiprocessing**: DBOS workflow containing multiprocessing pool
-  - **Best of Both Worlds**: DBOS workflow management with native multiprocessing performance
-  - **Complex Task Distribution**: Demonstrates how to integrate existing multiprocessing code into DBOS
-  - **Process Hierarchy**: Shows complex parent-child process relationships
-  - **Performance Optimization**: Leverages multiprocessing for CPU-bound tasks within DBOS workflows
+### 3. `hybrid_dbos_multiprocessing.py` - Hybrid Approach
+Combines DBOS durability with multiprocessing performance:
+- **DBOS workflows** for orchestration and fault tolerance
+- **DBOS steps** that internally use `multiprocessing.Pool`
+- Achieves both durable execution (DBOS) and true parallelism (multiprocessing)
 
-## Key Concepts Demonstrated
+**Architecture**:
+```
+DBOS Workflow → DBOS Step → Multiprocessing Pool → Parallel Processes
+(orchestration)  (durable)    (performance)         (true parallel)
+```
 
-### Concurrency Patterns
-- **DBOS Queues**: Managed concurrency with built-in retry, persistence, and monitoring
-- **Python Multiprocessing**: Native OS-level parallelism for CPU-intensive tasks
-- **Hybrid Approach**: Combining DBOS workflow management with multiprocessing performance
+## Key Insights
 
-### Performance Comparison
-- **Execution Times**: Direct comparison between DBOS queues and multiprocessing
-- **Process Management**: Different approaches to process creation and management
-- **Resource Utilization**: How each approach uses system resources
+1. **DBOS Limitation**: DBOS workflows don't create separate processes - all run in a single process, subject to GIL limitations
+2. **Performance**: For CPU-intensive tasks, standard multiprocessing is faster than DBOS workflows alone
+3. **Best of Both Worlds**: The hybrid approach leverages DBOS for durability/recovery while using multiprocessing for performance
+4. **Use Cases**:
+   - Use DBOS workflows for I/O-bound tasks, orchestration, and resilience
+   - Use multiprocessing within DBOS steps for CPU-bound computations
+   - The hybrid approach is ideal when you need both fault tolerance and parallel performance
 
-### Process Tracking
-- **PID/PPID Logging**: Understanding process relationships in each approach
-- **Execution Monitoring**: Detailed timing and performance metrics
-- **Workflow Management**: How DBOS manages long-running CPU-intensive tasks
+## Running the Experiments
 
-### Use Case Analysis
-- **DBOS Queues**: Best for I/O-bound tasks, need persistence, retry logic, monitoring
-- **Multiprocessing**: Best for CPU-bound tasks, maximum performance, no persistence needed
-- **Hybrid**: Complex workflows requiring both benefits
+```bash
+# DBOS async workflows (single process)
+python exp8/main.py
 
-## Performance Insights
+# Standard multiprocessing (multiple processes, faster)
+python exp8/exp_multip.py
 
-Based on the included execution logs:
-- **Traditional Multiprocessing**: Faster execution for pure CPU tasks due to direct OS process management
-- **DBOS Queues**: Slightly slower but provides workflow persistence, error handling, and monitoring
-- **Trade-offs**: Performance vs. reliability, observability, and workflow management capabilities
+# Hybrid DBOS + multiprocessing (durable + fast)
+python exp8/hybrid_dbos_multiprocessing.py
+```
 
-This experiment helps determine when to use DBOS queues versus traditional multiprocessing based on specific application requirements.
+All experiments log PIDs to demonstrate process creation patterns and execution timing.

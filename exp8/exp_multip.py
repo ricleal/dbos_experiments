@@ -7,6 +7,8 @@ from typing import Tuple
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Not using DBOS here, just standard multiprocessing to compare performance
+
 
 def fibonacci(n: int) -> int:
     if n <= 1:
@@ -34,7 +36,7 @@ def parallel_workflow(p: int) -> Tuple[int, int]:
             duration=t,
         )
     )
-    return p, res
+    return p, res, t
 
 
 if __name__ == "__main__":
@@ -48,12 +50,13 @@ if __name__ == "__main__":
 
     with Pool(10) as p:
         results = p.map(parallel_workflow, list(range(30, 50)))
-    for p, res in results:
+    for p, res, t in results:
         logger.info(
             dict(
                 message="Parallel Workflow Result",
                 p=p,
                 result=res,
+                duration=t,
                 pid=os.getpid(),
                 ppid=os.getppid(),
             )

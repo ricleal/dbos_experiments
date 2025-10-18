@@ -240,6 +240,221 @@ python ex4.py
 
 ---
 
+## Example 5: Profiling DBOS Workflows (`ex5.py`)
+
+### Purpose
+Demonstrates how to profile DBOS applications to understand performance characteristics and identify bottlenecks in workflow execution.
+
+### Key Features
+- **Performance profiling**: Uses `cProfile` to profile entire workflow execution
+- **Nested workflows**: Implements batch processing using sub-workflows
+- **Batch workflow pattern**: Processes users in 10 batches of 10 pages each
+- **Profile output**: Generates `.prof` files for visualization with snakeviz
+
+### Architecture
+```
+users_workflow (main)
+  └─> users_batch_workflow (batch 1-10)
+       └─> users() step (page 1-10 per batch)
+       └─> insert_users_page()
+```
+
+### Profiling Implementation
+```python
+# Profile the entire workflow execution
+profiler = cProfile.Profile()
+profiler.enable()
+
+try:
+    handle = DBOS.start_workflow(users_workflow)
+    output = handle.get_result()
+finally:
+    profiler.disable()
+    profiler.dump_stats("main_profile.prof")
+```
+
+### Workflow Structure
+- **Main workflow**: `users_workflow()` - Processes 10 batches
+- **Batch workflow**: `users_batch_workflow()` - Processes 10 pages per batch
+- **Step**: `users()` - Generates 10 users per page
+- **Total**: 1,000 users (10 batches × 10 pages × 10 users)
+
+### Profiling Insights
+The profiling reveals:
+- Time spent in DBOS framework overhead (`_outcome.py`, `core.py`)
+- Actual business logic execution time
+- Database operation performance
+- Workflow orchestration costs
+
+### Visualization
+```bash
+# Generate profile
+python ex5.py
+
+# Visualize with snakeviz
+snakeviz main_profile.prof
+```
+
+### Usage
+```bash
+python ex5.py
+```
+
+### Learning Points
+- How to profile DBOS applications effectively
+- Understanding DBOS framework overhead vs business logic
+- Profiling workflow execution from the main function level
+- Using snakeviz for visual performance analysis
+- Identifying performance bottlenecks in distributed workflows
+
+---
+
+## Example 6: Handling Duplicate Data from Step Failures (`ex6.py`)
+
+### Purpose
+Demonstrates a **realistic production scenario** where database insertion steps fail AFTER writing data, creating duplicates that must be handled correctly during workflow recovery.
+
+### Key Features
+- **Post-insertion failures**: Step fails AFTER successful database write
+- **Duplicate handling**: Uses SQL window functions to deduplicate data
+- **Workflow recovery**: Handles both step retries and workflow crashes
+- **Batch workflow architecture**: Same structure as ex5 but with failure simulation
+- **Accurate counting**: Counts unique users despite duplicates
+
+### The Problem This Solves
+In real-world scenarios, a database insertion might succeed but the step could fail afterwards due to:
+- Network timeout after the transaction commits
+- Memory errors (OOM) after data is written
+- Process crashes between DB commit and step completion
+- External API failures after DB write
+
+This creates duplicates because DBOS will retry the step:
+
+```python
+@DBOS.step(retries_allowed=True, max_attempts=10)
+def insert_users_step(user_list, workflow_id, analyzed_at):
+    # Insert data
+    insert_users_page(user_list, workflow_id, analyzed_at)
+    
+    # Simulate failure AFTER insertion (40% chance)
+    if random.random() < 0.4:
+        raise Exception("Simulated database insertion failure")
+    # On retry, data gets inserted again → duplicates!
+```
+
+### Duplicate Scenarios Handled
+
+#### 1. Step Retries (same `analyzed_at`)
+When a step is retried within the same workflow execution:
+- Same `workflow_id` ✓
+- Same `analyzed_at` ✓
+- Different `created_at` (auto-generated timestamp)
+
+#### 2. Workflow Crashes (different `analyzed_at`)
+When the entire process crashes and workflow recovers:
+- Same `workflow_id` ✓
+- **Different** `analyzed_at` (new timestamp on recovery)
+- Different `created_at`
+
+### The Solution: Window Function Deduplication
+
+```sql
+WITH ranked_users AS (
+    SELECT 
+        id,
+        workflow_id,
+        created_at,
+        ROW_NUMBER() OVER (
+            PARTITION BY id, workflow_id
+            ORDER BY created_at DESC
+        ) as rn
+    FROM users
+    WHERE workflow_id = ?
+)
+SELECT COUNT(*)
+FROM ranked_users
+WHERE rn = 1
+```
+
+**How it works**:
+- Partitions by `(id, workflow_id)` - groups all versions of same user in same workflow
+- Orders by `created_at DESC` - most recent insertion first
+- Selects `rn = 1` - only the latest version of each user
+- Works for both step retries AND workflow crashes
+
+### Database Schema
+```sql
+CREATE TABLE users (
+    id TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    workflow_id TEXT NOT NULL,
+    analyzed_at TEXT NOT NULL,
+    created_at DATETIME DEFAULT(datetime('subsec')),  -- Subsecond precision
+    PRIMARY KEY (id, workflow_id, analyzed_at, created_at)
+)
+```
+
+### Failure Simulation
+```python
+# Step-level failures (40% chance)
+if random.random() < 0.4:
+    raise Exception("Simulated database insertion failure")
+
+# Workflow-level crashes (10% chance after batch 5)
+if batch_number > 5 and random.random() < 0.1:
+    import ctypes
+    ctypes.string_at(0)  # Simulate OOM crash
+```
+
+### Running Until Success
+Since this example simulates frequent failures, use a retry loop:
+
+```bash
+# Keep retrying until workflow completes
+while ! python exp13/ex6.py; do echo "Restarting..."; sleep 1; done
+```
+
+### Workflow Flow
+1. Check for pending workflows
+2. Resume existing or start new workflow
+3. For each batch (1-10):
+   - Generate users (step with 2% failure rate)
+   - Insert users (step with 40% failure rate AFTER insertion)
+   - Potentially crash entire process (10% chance after batch 5)
+4. Count unique users using window function
+5. Return deduplicated user count
+
+### Key Design Insights
+
+| Aspect | Decision | Rationale |
+|--------|----------|-----------|
+| Failure timing | AFTER DB write | Simulates realistic network/timeout scenarios |
+| Deduplication | Window function | Handles both step retries and workflow crashes |
+| Partition key | `(id, workflow_id)` | Groups all versions of same user in workflow |
+| Ordering | `created_at DESC` | Most recent insertion wins |
+| No `analyzed_at` in partition | Intentional | Different `analyzed_at` on crash, same workflow_id |
+
+### Usage
+```bash
+# Single run (may fail and require restart)
+python ex6.py
+
+# Run until success (recommended)
+while ! python exp13/ex6.py; do echo "Restarting..."; sleep 1; done
+```
+
+### Learning Points
+- **Critical pattern**: Handling failures that occur AFTER database writes
+- Why `created_at` timestamp is sufficient for deduplication
+- Using SQL window functions for duplicate resolution
+- Designing resilient workflows that produce correct results despite duplicates
+- Understanding the difference between step retries and workflow recovery
+- Real-world production patterns for idempotent data processing
+- Why partitioning by `(id, workflow_id)` without `analyzed_at` is correct
+
+---
+
 ## Running the Examples
 
 ### Prerequisites

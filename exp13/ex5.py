@@ -90,7 +90,7 @@ def users_workflow() -> int:
             ctypes.string_at(0)
         # End simulate
 
-    user_count = get_most_recent_user_count()
+    user_count = get_most_recent_user_count(workflow_id=DBOS.workflow_id)
     DBOS.logger.info("Workflow: Finishing")
     return user_count
 
