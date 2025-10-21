@@ -209,7 +209,9 @@ def main(users_workflow):
 
     # Wait for the background task to complete and retrieve its result.
     output = handle.get_result()
-    DBOS.logger.info(f"Main: 💚 Workflow output: {output} users processed")
+    DBOS.logger.info(f"Main: 💚 Workflow output: {output} unique users processed")
+    status = DBOS.get_workflow_status(workflow_id=handle.workflow_id)
+    DBOS.logger.info(f"Main: 🏁 Workflow status: {status.status}")
 
     DBOS.logger.info(f"Main: ✔️ Total users in database: {get_user_count()}")
 
