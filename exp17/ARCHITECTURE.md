@@ -10,51 +10,102 @@ The pipeline uses a hierarchical workflow structure with four levels:
 
 ```mermaid
 graph TD
-    A[Scheduled Trigger] -->|Daily 5:20 AM GMT| B[Root Orchestration Workflow]
-    B -->|For each org/integration| C[ELT Pipeline Workflow]
-    C -->|Stage 1| D[Extract & Load Workflow]
-    C -->|Stage 2| E[CDC Detection Workflow]
-    C -->|Stage 3| F[Apply to Latest Workflow]
-    C -->|Stage 4| G[Sync to Postgres Workflow]
-    D -->|For each batch| H[Extract & Load Batch Workflow]
-    H -->|For each page| I[fetch_users_from_api Step]
-    H -->|Batch insert| J[insert_users_to_staging Step]
+    A[⏰ Scheduled Trigger<br/>scheduled_elt_trigger] -->|Daily 5:20 AM GMT| B[🌟 Root Orchestration Workflow<br/>root_orchestration_workflow]
+    B -->|For each org/integration| C[🚀 ELT Pipeline Workflow<br/>elt_pipeline_workflow]
+    C -->|🔷 Stage 1| D[🎯 Extract & Load Workflow<br/>extract_and_load_workflow]
+    C -->|🔷 Stage 2| E[🔎 CDC Detection Workflow<br/>detect_changes_workflow]
+    C -->|🔷 Stage 3| F[▶️ Apply to Latest Workflow<br/>apply_changes_to_latest_workflow]
+    C -->|🔷 Stage 4| G[🔄 Sync to Postgres Workflow<br/>sync_to_postgres_workflow]
+    D -->|For each batch 1-10| H[📦 Extract & Load Batch Workflow<br/>extract_and_load_batch_workflow]
+    H -->|For each page 1-10| I[📡 fetch_users_from_api<br/>Step with retry]
+    H -->|Batch insert| J[💾 insert_users_to_staging<br/>Step with retry]
+    E -->|Calls| K[🔍 detect_changes_step<br/>Step - detects INSERT/UPDATE/DELETE]
+    F -->|Calls| L[⚡ apply_changes_step<br/>Step - applies CDC to latest]
+    G -->|Calls| M[📥 get_cdc_changes_step<br/>Step - retrieves CDC records]
 ```
 
 ### Workflow Hierarchy
 
-1. **Scheduled Trigger** (`scheduled_elt_trigger`)
-   - Runs daily at 5:20 AM GMT
-   - Starts the root orchestration workflow in the background
+1. **⏰ Scheduled Trigger** (`scheduled_elt_trigger`)
+   - Runs daily at 5:20 AM GMT using `@DBOS.scheduled("20 5 * * *")`
+   - Starts the root orchestration workflow in the background via `DBOS.start_workflow()`
    - Returns the workflow ID for tracking
+   - Max recovery attempts: 10
 
-2. **Root Orchestration** (`root_orchestration_workflow`)
+2. **🌟 Root Orchestration** (`root_orchestration_workflow`)
    - Fetches all connected integrations from the database
-   - Launches an ELT pipeline for each org/integration pair
-   - Aggregates results and provides summary statistics
-   - Max recovery attempts: 50
+   - Launches an ELT pipeline synchronously for each org/integration pair
+   - Aggregates results and provides summary statistics (total integrations, total users)
+   - Max recovery attempts: 10
 
-3. **ELT Pipeline** (`elt_pipeline_workflow`)
+3. **🚀 ELT Pipeline** (`elt_pipeline_workflow`)
    - Orchestrates the four sequential stages for a single org/integration pair:
-     - **Stage 1**: Extract and Load
-     - **Stage 2**: CDC (Change Data Capture) Detection
-     - **Stage 3**: Apply changes to Latest table
-     - **Stage 4**: Sync to Postgres main database
-   - Max recovery attempts: 100
+     - **🔷 Stage 1**: Extract and Load (fetches 1000 users by default)
+     - **🔷 Stage 2**: CDC (Change Data Capture) Detection (detects INSERT/UPDATE/DELETE)
+     - **🔷 Stage 3**: Apply changes to Latest table (applies CDC operations)
+     - **🔷 Stage 4**: Sync to Postgres main database (simulated)
+   - Max recovery attempts: 10
+   - Can be triggered manually or via queue for specific org/integration pairs
 
 4. **Sub-Workflows**:
-   - **Extract & Load Workflow** (`extract_and_load_workflow`): Processes data in batches
-   - **Extract & Load Batch Workflow** (`extract_and_load_batch_workflow`): Processes a single batch
-   - **CDC Detection** (`detect_changes_workflow`): Orchestrates CDC detection step
-   - **Apply to Latest** (`apply_changes_to_latest_workflow`): Orchestrates applying changes to latest table
-   - **Sync to Postgres** (`sync_to_postgres_workflow`): Orchestrates syncing to Postgres
+   - **🎯 Extract & Load Workflow** (`extract_and_load_workflow`): 
+     - Processes data in batches (10 batches × 10 pages = 100 pages = 1000 users)
+     - Includes 5% OOM simulation after batch 5
+     - Returns unique user count (handles duplicates from retries)
+     - Max recovery attempts: 10
+   
+   - **📦 Extract & Load Batch Workflow** (`extract_and_load_batch_workflow`): 
+     - Processes a single batch (10 pages)
+     - Accumulates users from all pages, then does batch insert
+     - Returns count of users in batch
+     - Max recovery attempts: 10
+   
+   - **🔎 CDC Detection** (`detect_changes_workflow`): 
+     - Gets count in latest table before CDC
+     - Calls detect_changes_step (idempotent: deletes existing CDC records first)
+     - Logs expected final count
+     - Max recovery attempts: 10
+   
+   - **▶️ Apply to Latest** (`apply_changes_to_latest_workflow`): 
+     - Applies CDC changes to latest table
+     - Gets final count in latest table
+     - Returns applied count and latest count
+     - Max recovery attempts: 10
+   
+   - **🔄 Sync to Postgres** (`sync_to_postgres_workflow`): 
+     - Retrieves CDC changes from database
+     - Counts changes by type (INSERT/UPDATE/DELETE)
+     - Simulates Postgres sync with 1-second sleep
+     - Returns sync statistics
+     - Max recovery attempts: 10
 
 5. **Steps** (actual work execution):
-   - **fetch_users_from_api**: Fetches one page of users from external API
-   - **insert_users_to_staging**: Inserts batch of users into staging table
-   - **detect_changes_step**: Executes CDC detection logic (delete-before-insert for idempotency)
-   - **apply_changes_step**: Applies CDC changes to latest table (INSERT OR REPLACE for idempotency)
-   - **get_cdc_changes_step**: Retrieves CDC changes for syncing
+   - **📡 fetch_users_from_api**: 
+     - Fetches one page (10 users) from external API
+     - Simulates 2% API failure rate
+     - Retry config: max_attempts=3
+   
+   - **💾 insert_users_to_staging**: 
+     - Inserts batch of users into staging table
+     - Simulates 40% database insertion failure (after insert, to test idempotency)
+     - Retry config: max_attempts=10, backoff_rate=0.1, interval_seconds=0.1
+   
+   - **🔍 detect_changes_step**: 
+     - Detects INSERT (new in staging), UPDATE (changed), DELETE (missing from staging)
+     - Idempotent: deletes existing CDC records for workflow_id before inserting
+     - Returns dict with inserts/updates/deletes/total_changes
+   
+   - **⚡ apply_changes_step**: 
+     - Applies CDC changes to latest table
+     - Uses INSERT OR REPLACE for INSERT/UPDATE operations
+     - Uses DELETE for DELETE operations
+     - Idempotent: same operations produce same result
+     - Returns total count applied (inserts + updates + deletes)
+   
+   - **📥 get_cdc_changes_step**: 
+     - Retrieves all CDC changes for a workflow_id
+     - Returns list of change records with metadata
+     - Used by sync workflow to determine what to sync
 
 ## Batching Strategy
 
@@ -395,29 +446,54 @@ elt_queue = Queue("elt_queue", concurrency=5)
 
 ```mermaid
 sequenceDiagram
-    participant S as Scheduler
-    participant R as Root Workflow
-    participant E as ELT Pipeline
-    participant B as Batch Workflow
-    participant API as External API
-    participant DB as SQLite DB
+    participant S as ⏰ Scheduler
+    participant R as 🌟 Root Workflow
+    participant E as 🚀 ELT Pipeline
+    participant Extract as 🎯 Extract & Load
+    participant B as 📦 Batch Workflow
+    participant API as 📡 External API
+    participant CDC as 🔎 CDC Detection
+    participant Apply as ▶️ Apply to Latest
+    participant Sync as 🔄 Sync to Postgres
+    participant DB as 💾 SQLite DB
     
-    S->>R: Trigger daily at 5:20 AM
-    R->>DB: Fetch all integrations
+    S->>R: ⏰ Trigger daily at 5:20 AM
+    R->>DB: 🔎 Fetch all integrations
     loop For each integration
-        R->>E: Start ELT pipeline
+        R->>E: 🚀 Start ELT pipeline
+        
+        Note over E: 🔷 Stage 1: Extract & Load
+        E->>Extract: Start extract workflow
         loop For each batch (10)
-            E->>B: Process batch
+            Extract->>B: 📦 Process batch
             loop For each page (10)
-                B->>API: Fetch users (with retry)
+                B->>API: 📡 Fetch users (retry: 3 attempts)
             end
-            B->>DB: Insert batch (with retry)
+            B->>DB: 💾 Insert batch (retry: 10 attempts)
         end
-        E->>E: CDC Detection
-        E->>DB: Apply to Latest (deduplicated)
-        E->>E: Sync to Postgres
+        Extract-->>E: ✅ Return unique user count
+        
+        Note over E: 🔷 Stage 2: CDC Detection
+        E->>CDC: 🔎 Start CDC detection
+        CDC->>DB: 📈 Get latest table count
+        CDC->>DB: 🔍 Detect INSERT/UPDATE/DELETE
+        CDC-->>E: ✨ Return changes (inserts/updates/deletes)
+        
+        Note over E: 🔷 Stage 3: Apply to Latest
+        E->>Apply: ▶️ Start apply workflow
+        Apply->>DB: ⚡ Apply CDC changes (INSERT OR REPLACE + DELETE)
+        Apply->>DB: 📊 Get final latest count
+        Apply-->>E: 💚 Return applied count
+        
+        Note over E: 🔷 Stage 4: Sync to Postgres
+        E->>Sync: 🔄 Start sync workflow
+        Sync->>DB: 📥 Get CDC changes
+        Sync->>Sync: 🔃 Simulate Postgres sync
+        Sync-->>E: ✅ Return sync results
+        
+        E-->>R: 🎊 Return pipeline results
     end
-    R->>R: Return summary
+    R-->>S: 🎉 Return summary with total users
 ```
 
 ## Multi-Tenancy Architecture
