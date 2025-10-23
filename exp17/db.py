@@ -30,7 +30,9 @@ def create_database(db_path: str = "data.db", truncate: bool = False) -> None:
     cursor = conn.cursor()
 
     if truncate:
-        cursor.execute("DROP TABLE IF EXISTS users")
+        cursor.execute("DROP TABLE IF EXISTS users_staging")
+        cursor.execute("DROP TABLE IF EXISTS users_cdc")
+        cursor.execute("DROP TABLE IF EXISTS users_latest")
         cursor.execute("DROP TABLE IF EXISTS connected_integrations")
 
     # Create connected_integrations table
@@ -43,9 +45,10 @@ def create_database(db_path: str = "data.db", truncate: bool = False) -> None:
         )
     """)
 
-    # Create users table (staging)
+    # Create users_staging table (raw data from API with duplicates)
+    # Multi-tenant: id can be duplicated across orgs/integrations
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
+        CREATE TABLE IF NOT EXISTS users_staging (
             id TEXT NOT NULL,
             workflow_id TEXT NOT NULL,
             external_id TEXT NOT NULL,
@@ -54,7 +57,39 @@ def create_database(db_path: str = "data.db", truncate: bool = False) -> None:
             name TEXT NOT NULL,
             email TEXT NOT NULL,
             created_at DATETIME DEFAULT(datetime('subsec')),
-            PRIMARY KEY (id, workflow_id, created_at)
+            PRIMARY KEY (id, organization_id, connected_integration_id, workflow_id, created_at)
+        )
+    """)
+
+    # Create users_cdc table (change data capture)
+    # Multi-tenant: id can be duplicated across orgs/integrations
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users_cdc (
+            id TEXT NOT NULL,
+            workflow_id TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            organization_id TEXT NOT NULL,
+            connected_integration_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            change_type TEXT NOT NULL,  -- 'INSERT', 'UPDATE', 'DELETE'
+            detected_at DATETIME DEFAULT(datetime('subsec')),
+            PRIMARY KEY (id, organization_id, connected_integration_id, workflow_id, detected_at)
+        )
+    """)
+
+    # Create users_latest table (current state - deduplicated)
+    # Multi-tenant: id can be duplicated across orgs/integrations
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users_latest (
+            id TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            organization_id TEXT NOT NULL,
+            connected_integration_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            last_updated DATETIME DEFAULT(datetime('subsec')),
+            PRIMARY KEY (id, organization_id, connected_integration_id)
         )
     """)
 
@@ -169,7 +204,7 @@ def insert_users_batch(
     workflow_id: str,
     db_path: str = "data.db",
 ) -> None:
-    """Insert a batch of User records into the database.
+    """Insert a batch of User records into the staging table.
 
     Args:
         user_list: List of User objects to insert
@@ -194,7 +229,7 @@ def insert_users_batch(
 
     cursor.executemany(
         """
-        INSERT INTO users 
+        INSERT INTO users_staging 
         (id, workflow_id, external_id, organization_id, connected_integration_id, name, email) 
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
@@ -207,13 +242,15 @@ def insert_users_batch(
 
 def get_user_count(
     db_path: str = "data.db",
+    table_name: str = "users_staging",
     organization_id: Optional[str] = None,
     connected_integration_id: Optional[str] = None,
 ) -> int:
-    """Get the count of users, optionally filtered by org/integration.
+    """Get the count of users from a specific table, optionally filtered by org/integration.
 
     Args:
         db_path: Path to the SQLite database file
+        table_name: Name of the table to query (users_staging, users_latest, users_cdc)
         organization_id: Optional filter by organization
         connected_integration_id: Optional filter by integration
 
@@ -223,7 +260,7 @@ def get_user_count(
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    query = "SELECT COUNT(*) FROM users WHERE 1=1"
+    query = f"SELECT COUNT(*) FROM {table_name} WHERE 1=1"
     params = []
 
     if organization_id:
@@ -247,7 +284,7 @@ def get_unique_user_count(
     organization_id: Optional[str] = None,
     connected_integration_id: Optional[str] = None,
 ) -> int:
-    """Get count of unique users (handling duplicates from retries).
+    """Get count of unique users from staging (handling duplicates from retries).
 
     Uses window function to select only the most recent created_at for each
     (id, workflow_id) pair, handling both step retries and workflow recoveries.
@@ -276,7 +313,7 @@ def get_unique_user_count(
                     PARTITION BY id, workflow_id, organization_id, connected_integration_id
                     ORDER BY created_at DESC
                 ) as rn
-            FROM users
+            FROM users_staging
             WHERE 1=1
     """
 
@@ -306,3 +343,345 @@ def get_unique_user_count(
 
     conn.close()
     return count
+
+
+# ============================================================================
+# CDC (Change Data Capture) Functions
+# ============================================================================
+
+
+def detect_and_populate_cdc(
+    workflow_id: str,
+    organization_id: str,
+    connected_integration_id: UUID,
+    db_path: str = "data.db",
+) -> dict:
+    """Detect changes between staging and latest, populate CDC table.
+
+    This function is IDEMPOTENT - it can be called multiple times with the same
+    workflow_id without creating duplicates. It first clears any existing CDC
+    records for this workflow, then detects and inserts changes.
+
+    This ensures that if a workflow crashes and is replayed, we don't create
+    duplicate CDC records.
+
+    Args:
+        workflow_id: The workflow ID for tracking
+        organization_id: The organization ID
+        connected_integration_id: The connected integration ID
+        db_path: Path to the SQLite database file
+
+    Returns:
+        Dictionary with counts of each change type
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    # IDEMPOTENCY: Delete any existing CDC records for this workflow
+    # This ensures replays don't create duplicates
+    cursor.execute(
+        """
+        DELETE FROM users_cdc 
+        WHERE workflow_id = ?
+            AND organization_id = ?
+            AND connected_integration_id = ?
+        """,
+        (workflow_id, organization_id, str(connected_integration_id)),
+    )
+
+    # First, get deduplicated staging data using window function
+    staging_cte = """
+        WITH staging_deduped AS (
+            SELECT 
+                id,
+                external_id,
+                organization_id,
+                connected_integration_id,
+                name,
+                email,
+                created_at,
+                ROW_NUMBER() OVER (
+                    PARTITION BY id, workflow_id, organization_id, connected_integration_id
+                    ORDER BY created_at DESC
+                ) as rn
+            FROM users_staging
+            WHERE workflow_id = ?
+                AND organization_id = ?
+                AND connected_integration_id = ?
+        )
+    """
+
+    # Detect INSERTs: Records in staging but not in latest
+    # Multi-tenant: JOIN on id, organization_id, and connected_integration_id
+    insert_query = (
+        staging_cte
+        + """
+        INSERT INTO users_cdc (id, workflow_id, external_id, organization_id, connected_integration_id, name, email, change_type)
+        SELECT 
+            s.id,
+            ? as workflow_id,
+            s.external_id,
+            s.organization_id,
+            s.connected_integration_id,
+            s.name,
+            s.email,
+            'INSERT' as change_type
+        FROM staging_deduped s
+        LEFT JOIN users_latest l ON s.id = l.id 
+            AND s.organization_id = l.organization_id 
+            AND s.connected_integration_id = l.connected_integration_id
+        WHERE s.rn = 1 AND l.id IS NULL
+    """
+    )
+
+    cursor.execute(
+        insert_query,
+        (workflow_id, organization_id, str(connected_integration_id), workflow_id),
+    )
+
+    # Count inserted rows
+    cursor.execute(
+        """
+        SELECT COUNT(*) FROM users_cdc 
+        WHERE workflow_id = ? 
+            AND organization_id = ? 
+            AND connected_integration_id = ? 
+            AND change_type = 'INSERT'
+        """,
+        (workflow_id, organization_id, str(connected_integration_id)),
+    )
+    inserts = cursor.fetchone()[0]
+
+    # Detect UPDATEs: Records in both staging and latest with different data
+    # Multi-tenant: JOIN on id, organization_id, and connected_integration_id
+    update_query = (
+        staging_cte
+        + """
+        INSERT INTO users_cdc (id, workflow_id, external_id, organization_id, connected_integration_id, name, email, change_type)
+        SELECT 
+            s.id,
+            ? as workflow_id,
+            s.external_id,
+            s.organization_id,
+            s.connected_integration_id,
+            s.name,
+            s.email,
+            'UPDATE' as change_type
+        FROM staging_deduped s
+        INNER JOIN users_latest l ON s.id = l.id 
+            AND s.organization_id = l.organization_id 
+            AND s.connected_integration_id = l.connected_integration_id
+        WHERE s.rn = 1 
+            AND (s.name != l.name OR s.email != l.email)
+    """
+    )
+
+    cursor.execute(
+        update_query,
+        (workflow_id, organization_id, str(connected_integration_id), workflow_id),
+    )
+
+    # Count updated rows
+    cursor.execute(
+        """
+        SELECT COUNT(*) FROM users_cdc 
+        WHERE workflow_id = ? 
+            AND organization_id = ? 
+            AND connected_integration_id = ? 
+            AND change_type = 'UPDATE'
+        """,
+        (workflow_id, organization_id, str(connected_integration_id)),
+    )
+    updates = cursor.fetchone()[0]
+
+    # Detect DELETEs: Records in latest but not in current staging
+    # This identifies records that were previously synced but are no longer in the source
+    # Multi-tenant: JOIN on id, organization_id, and connected_integration_id
+    delete_query = (
+        staging_cte
+        + """
+        INSERT INTO users_cdc (id, workflow_id, external_id, organization_id, connected_integration_id, name, email, change_type)
+        SELECT 
+            l.id,
+            ? as workflow_id,
+            l.external_id,
+            l.organization_id,
+            l.connected_integration_id,
+            l.name,
+            l.email,
+            'DELETE' as change_type
+        FROM users_latest l
+        LEFT JOIN staging_deduped s ON l.id = s.id 
+            AND l.organization_id = s.organization_id 
+            AND l.connected_integration_id = s.connected_integration_id
+            AND s.rn = 1
+        WHERE l.organization_id = ?
+            AND l.connected_integration_id = ?
+            AND s.id IS NULL
+    """
+    )
+
+    cursor.execute(
+        delete_query,
+        (
+            workflow_id,
+            organization_id,
+            str(connected_integration_id),
+            workflow_id,
+            organization_id,
+            str(connected_integration_id),
+        ),
+    )
+
+    # Count deleted rows
+    cursor.execute(
+        """
+        SELECT COUNT(*) FROM users_cdc 
+        WHERE workflow_id = ? 
+            AND organization_id = ? 
+            AND connected_integration_id = ? 
+            AND change_type = 'DELETE'
+        """,
+        (workflow_id, organization_id, str(connected_integration_id)),
+    )
+    deletes = cursor.fetchone()[0]
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "inserts": inserts,
+        "updates": updates,
+        "deletes": deletes,
+        "total_changes": inserts + updates + deletes,
+    }
+
+
+def apply_cdc_to_latest(
+    workflow_id: str,
+    organization_id: str,
+    connected_integration_id: UUID,
+    db_path: str = "data.db",
+) -> int:
+    """Apply CDC changes to the latest table.
+
+    This function is IDEMPOTENT - it uses INSERT OR REPLACE which means:
+    - If a record doesn't exist, it's inserted
+    - If a record exists, it's updated with new values
+    - Multiple calls with the same data produce the same result
+
+    For DELETE operations, it removes records from the latest table.
+
+    This ensures that workflow replays don't create duplicate records in users_latest.
+
+    Args:
+        workflow_id: The workflow ID for tracking
+        organization_id: The organization ID
+        connected_integration_id: The connected integration ID
+        db_path: Path to the SQLite database file
+
+    Returns:
+        Count of records applied to latest table
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    # IDEMPOTENT: INSERT OR REPLACE ensures no duplicates
+    # If id exists, it replaces; if not, it inserts
+    apply_query = """
+        INSERT OR REPLACE INTO users_latest (id, external_id, organization_id, connected_integration_id, name, email, last_updated)
+        SELECT 
+            id,
+            external_id,
+            organization_id,
+            connected_integration_id,
+            name,
+            email,
+            datetime('subsec') as last_updated
+        FROM users_cdc
+        WHERE workflow_id = ?
+            AND organization_id = ?
+            AND connected_integration_id = ?
+            AND change_type IN ('INSERT', 'UPDATE')
+    """
+
+    cursor.execute(
+        apply_query, (workflow_id, organization_id, str(connected_integration_id))
+    )
+    applied_count = cursor.rowcount
+
+    # IDEMPOTENT: DELETE removes records from latest table
+    # Multiple calls with the same data produce the same result
+    delete_query = """
+        DELETE FROM users_latest
+        WHERE (id, organization_id, connected_integration_id) IN (
+            SELECT id, organization_id, connected_integration_id
+            FROM users_cdc
+            WHERE workflow_id = ?
+                AND organization_id = ?
+                AND connected_integration_id = ?
+                AND change_type = 'DELETE'
+        )
+    """
+
+    cursor.execute(
+        delete_query, (workflow_id, organization_id, str(connected_integration_id))
+    )
+    deleted_count = cursor.rowcount
+
+    total_applied = applied_count + deleted_count
+
+    conn.commit()
+    conn.close()
+
+    return total_applied
+
+
+def get_cdc_changes(
+    workflow_id: str,
+    organization_id: str,
+    connected_integration_id: UUID,
+    db_path: str = "data.db",
+) -> List[dict]:
+    """Get all CDC changes for a specific workflow.
+
+    Args:
+        workflow_id: The workflow ID
+        organization_id: The organization ID
+        connected_integration_id: The connected integration ID
+        db_path: Path to the SQLite database file
+
+    Returns:
+        List of dictionaries containing CDC records
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    query = """
+        SELECT id, external_id, organization_id, connected_integration_id, 
+               name, email, change_type, detected_at
+        FROM users_cdc
+        WHERE workflow_id = ?
+            AND organization_id = ?
+            AND connected_integration_id = ?
+        ORDER BY detected_at
+    """
+
+    cursor.execute(query, (workflow_id, organization_id, str(connected_integration_id)))
+    rows = cursor.fetchall()
+
+    conn.close()
+
+    return [
+        {
+            "id": row[0],
+            "external_id": row[1],
+            "organization_id": row[2],
+            "connected_integration_id": row[3],
+            "name": row[4],
+            "email": row[5],
+            "change_type": row[6],
+            "detected_at": row[7],
+        }
+        for row in rows
+    ]

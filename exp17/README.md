@@ -15,6 +15,7 @@ This project demonstrates a production-ready ELT pipeline that processes users f
 - **⏰ Scheduled Execution**: Daily automated runs via cron-like scheduling
 - **🌐 Remote Triggering**: Client can trigger workflows on demand
 - **❤️ Health Monitoring**: HTTP health check endpoint for service monitoring
+- **🏢 Multi-Tenant Architecture**: Complete data isolation per organization and integration
 
 ## Project Structure
 
@@ -152,6 +153,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed architecture documentation.
 
 ## Database Schema
 
+The pipeline uses four tables to implement a proper ELT flow:
+
 ### `connected_integrations`
 
 Stores integration configurations for each organization:
@@ -165,12 +168,12 @@ CREATE TABLE connected_integrations (
 )
 ```
 
-### `users`
+### `users_staging`
 
-Staging table for extracted users (supports duplicates for idempotency):
+Staging table for raw data extracted from APIs (supports duplicates for idempotency):
 
 ```sql
-CREATE TABLE users (
+CREATE TABLE users_staging (
     id TEXT NOT NULL,
     workflow_id TEXT NOT NULL,
     external_id TEXT NOT NULL,
@@ -179,11 +182,107 @@ CREATE TABLE users (
     name TEXT NOT NULL,
     email TEXT NOT NULL,
     created_at DATETIME DEFAULT(datetime('subsec')),
-    PRIMARY KEY (id, workflow_id, created_at)
+    PRIMARY KEY (id, organization_id, connected_integration_id, workflow_id, created_at)
 )
 ```
 
-The composite primary key allows duplicates while enabling efficient deduplication.
+**Multi-Tenant Primary Key:** `(id, organization_id, connected_integration_id, workflow_id, created_at)`
+- First 3 fields form the multi-tenant user identity
+- User IDs can be duplicated across different organizations/integrations
+- `workflow_id` and `created_at` enable idempotent retries
+
+### `users_cdc`
+
+Change Data Capture table that tracks INSERT, UPDATE, and DELETE operations:
+
+```sql
+CREATE TABLE users_cdc (
+    id TEXT NOT NULL,
+    workflow_id TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    organization_id TEXT NOT NULL,
+    connected_integration_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    change_type TEXT NOT NULL,  -- 'INSERT', 'UPDATE', 'DELETE'
+    detected_at DATETIME DEFAULT(datetime('subsec')),
+    PRIMARY KEY (id, organization_id, connected_integration_id, workflow_id, detected_at)
+)
+```
+
+**Multi-Tenant Primary Key:** `(id, organization_id, connected_integration_id, workflow_id, detected_at)`
+- Ensures CDC records are isolated per organization/integration
+- `workflow_id` and `detected_at` support idempotent detection
+
+### `users_latest`
+
+Latest state table containing deduplicated, current records:
+
+```sql
+CREATE TABLE users_latest (
+    id TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    organization_id TEXT NOT NULL,
+    connected_integration_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    last_updated DATETIME DEFAULT(datetime('subsec')),
+    PRIMARY KEY (id, organization_id, connected_integration_id)
+)
+```
+
+**Multi-Tenant Primary Key:** `(id, organization_id, connected_integration_id)`
+- Enforces uniqueness per user per organization per integration
+- Allows same user ID to exist in different tenant contexts
+
+## ELT Pipeline Stages
+
+The pipeline follows a proper ELT flow with four distinct stages:
+
+### Stage 1: Extract & Load
+- Fetches data from external APIs in batches
+- Loads raw data into `users_staging` table
+- Handles duplicates from retries using composite primary key
+- Uses window functions for deduplication
+
+### Stage 2: CDC Detection
+- Compares deduplicated staging data with `users_latest`
+- Identifies INSERT operations (new records)
+- Identifies UPDATE operations (changed records)
+- Populates `users_cdc` table with detected changes
+
+**SQL Logic (Multi-Tenant Aware):**
+```sql
+-- INSERTs: Records in staging but not in latest
+SELECT * FROM staging_deduped
+LEFT JOIN users_latest 
+    ON staging.id = latest.id 
+    AND staging.organization_id = latest.organization_id
+    AND staging.connected_integration_id = latest.connected_integration_id
+WHERE latest.id IS NULL
+
+-- UPDATEs: Records in both with different data
+SELECT * FROM staging_deduped
+INNER JOIN users_latest 
+    ON staging.id = latest.id
+    AND staging.organization_id = latest.organization_id
+    AND staging.connected_integration_id = latest.connected_integration_id
+WHERE staging.name != latest.name OR staging.email != latest.email
+```
+
+All JOINs include `organization_id` and `connected_integration_id` to ensure proper multi-tenant isolation.
+
+### Stage 3: Apply to Latest
+- Reads changes from `users_cdc` table
+- Applies INSERT and UPDATE operations to `users_latest`
+- Uses `INSERT OR REPLACE` for atomic updates
+- Maintains current state in the latest table
+
+### Stage 4: Sync to Postgres
+- Reads changes from `users_cdc` table
+- Simulates syncing to a Postgres main database
+- In production, would execute actual INSERT/UPDATE/DELETE on Postgres
+- Tracks sync status and timestamps
 
 ## Failure Simulation
 
@@ -286,21 +385,126 @@ extract_and_load_workflow(
 
 ## Testing
 
+### Run the Test Script
+
+The easiest way to test the complete ELT pipeline:
+
+```bash
+python test_elt.py
+```
+
+This script will:
+1. Initialize a fresh database with test data
+2. Run a complete ELT pipeline for one org/integration
+3. Display results from all tables (staging, CDC, latest)
+4. Verify the pipeline worked correctly
+
+Expected output:
+```
+🧪 Testing ELT Pipeline
+============================================================
+📦 Initializing database...
+✅ Database initialized
+🌱 Seeding connected integrations...
+✅ Seeded 2 integrations
+🚀 Launching DBOS...
+🔄 Running ELT pipeline...
+✅ ELT Pipeline Completed Successfully!
+📈 Results:
+   Users loaded (staging): 1000
+   CDC changes detected: 1000 (1000 inserts, 0 updates)
+   Applied to latest: 1000 changes
+   Latest table records: 1000
+   Synced to Postgres: 1000 changes
+```
+
+### Test Idempotency
+
+To verify the pipeline handles workflow replays without creating duplicates:
+
+```bash
+python test_idempotency.py
+```
+
+This script will:
+1. Run the ELT pipeline with a fixed workflow_id
+2. Run it AGAIN with the same workflow_id (simulating crash/replay)
+3. Verify no duplicate records were created
+4. Confirm idempotency guarantees
+
+Expected output:
+```
+🧪 Testing ELT Pipeline Idempotency
+============================================================
+🔄 FIRST RUN - Running ELT pipeline
+✅ First run completed!
+
+🔄 SECOND RUN - Simulating workflow replay with SAME workflow_id
+✅ Second run completed!
+
+🔍 IDEMPOTENCY VERIFICATION
+1️⃣  Checking if results are identical...
+   ✅ Users loaded count matches
+2️⃣  Checking CDC table for duplicates...
+   ✅ CDC table unchanged: 1000 records (no duplicates!)
+3️⃣  Checking Latest table for duplicates...
+   ✅ Latest table unchanged: 1000 records (no duplicates!)
+
+🎉 ALL CHECKS PASSED! Pipeline is IDEMPOTENT!
+```
+
+### Manual Testing
+
 Run workflows manually for testing:
 
 ```python
-from elt import root_orchestration_workflow
+from elt import root_orchestration_workflow, elt_pipeline_workflow
 from dbos import DBOS
 
-# Run the full pipeline
+# Run a single ELT pipeline
+result = elt_pipeline_workflow(
+    organization_id="org-001",
+    connected_integration_id="<uuid-here>"
+)
+print(result)
+
+# Run the full pipeline for all integrations
 result = root_orchestration_workflow()
 print(result)
 ```
 
-Or use the client:
+### Using the Client
+
+Or use the client for remote testing:
 
 ```bash
+# Test a single org/integration
+python client.py start elt_pipeline_workflow \
+    organization_id=org-001 \
+    connected_integration_id=<uuid-here>
+
+# Test all integrations
 python client.py start root_orchestration_workflow
+```
+
+### Inspecting the Database
+
+After running the pipeline, inspect the tables:
+
+```python
+from db import get_user_count
+
+# Check staging table
+staging_count = get_user_count(table_name="users_staging")
+print(f"Staging: {staging_count} records")
+
+# Check CDC table
+cdc_count = get_user_count(table_name="users_cdc")
+print(f"CDC: {cdc_count} changes")
+
+# Check latest table
+latest_count = get_user_count(table_name="users_latest")
+print(f"Latest: {latest_count} records")
 ```
 
 ## Key Files Explained
@@ -341,6 +545,35 @@ Database operations:
 - User insertion with batch support
 - Deduplication via SQL window functions
 
+## Idempotency and Duplication Prevention
+
+⚠️ **CRITICAL:** The pipeline is designed to be **duplication-proof** when workflows crash and replay.
+
+Key mechanisms:
+- **Staging Table**: Window functions deduplicate retry-induced duplicates
+- **CDC Table**: Delete-before-insert ensures no duplicate change records
+- **Latest Table**: `INSERT OR REPLACE` provides upsert semantics
+- **Workflow Recovery**: DBOS guarantees steps won't re-execute on replay
+- **Multi-Tenancy**: Composite keys ensure isolation per organization/integration
+
+For detailed explanation, see [IDEMPOTENCY.md](IDEMPOTENCY.md) and [MULTI_TENANCY.md](MULTI_TENANCY.md).
+
+### Quick Example
+
+```python
+from dbos import SetWorkflowID
+
+# Same workflow_id = idempotent operation
+with SetWorkflowID("test-workflow-001"):
+    result1 = elt_pipeline_workflow(org_id, integration_id)
+
+# Simulate crash and replay - produces same result
+with SetWorkflowID("test-workflow-001"):
+    result2 = elt_pipeline_workflow(org_id, integration_id)
+
+assert result1 == result2  # ✅ No duplicates!
+```
+
 ## Production Considerations
 
 ### Scaling
@@ -359,6 +592,7 @@ Database operations:
 
 ### Data Consistency
 
+- **Idempotent operations** prevent duplicates on replay (see [IDEMPOTENCY.md](IDEMPOTENCY.md))
 - Deduplication handles retry-induced duplicates automatically
 - Composite primary key prevents constraint violations
 - Window functions ensure latest data is used

@@ -45,9 +45,16 @@ graph TD
 4. **Sub-Workflows**:
    - **Extract & Load Workflow** (`extract_and_load_workflow`): Processes data in batches
    - **Extract & Load Batch Workflow** (`extract_and_load_batch_workflow`): Processes a single batch
-   - **CDC Detection** (`detect_changes_workflow`): Mock workflow for change detection
-   - **Apply to Latest** (`apply_changes_to_latest_workflow`): Uses window function for deduplication
-   - **Sync to Postgres** (`sync_to_postgres_workflow`): Mock workflow for final sync
+   - **CDC Detection** (`detect_changes_workflow`): Orchestrates CDC detection step
+   - **Apply to Latest** (`apply_changes_to_latest_workflow`): Orchestrates applying changes to latest table
+   - **Sync to Postgres** (`sync_to_postgres_workflow`): Orchestrates syncing to Postgres
+
+5. **Steps** (actual work execution):
+   - **fetch_users_from_api**: Fetches one page of users from external API
+   - **insert_users_to_staging**: Inserts batch of users into staging table
+   - **detect_changes_step**: Executes CDC detection logic (delete-before-insert for idempotency)
+   - **apply_changes_step**: Applies CDC changes to latest table (INSERT OR REPLACE for idempotency)
+   - **get_cdc_changes_step**: Retrieves CDC changes for syncing
 
 ## Batching Strategy
 
@@ -108,6 +115,199 @@ def scheduled_elt_trigger(scheduled_time, actual_time):
 - **Trigger Method**: `DBOS.start_workflow()` (non-blocking)
 - **Resilience**: If the system is down, the workflow will run when it comes back online
 
+## When to Use Steps vs Workflow Logic
+
+A critical architectural principle in DBOS is understanding when to use **steps** versus keeping logic in **workflows**. This impacts resilience, observability, and retry behavior.
+
+### Use Steps For:
+
+✅ **Database Operations**
+```python
+@DBOS.step()
+def detect_changes_step(workflow_id: str, org_id: str, integration_id: UUID):
+    # Database queries/updates should be in steps
+    changes = detect_and_populate_cdc(workflow_id, org_id, integration_id)
+    return changes
+```
+
+✅ **External API Calls**
+```python
+@DBOS.step(retries_allowed=True, max_attempts=3)
+def fetch_users_from_api(org_id: str, integration_id: UUID, page: int):
+    # HTTP requests should be in steps
+    return api_client.get_users(page)
+```
+
+✅ **File I/O Operations**
+```python
+@DBOS.step()
+def write_to_file(data: dict):
+    # File operations should be in steps
+    with open("output.json", "w") as f:
+        json.dump(data, f)
+```
+
+✅ **Any Operation That Might Fail Transiently**
+```python
+@DBOS.step(retries_allowed=True, max_attempts=10, backoff_rate=2.0)
+def send_notification(user_id: str, message: str):
+    # Unreliable operations benefit from step-level retry
+    notification_service.send(user_id, message)
+```
+
+✅ **Operations You Want to Track Separately**
+```python
+@DBOS.step()
+def apply_changes_step(workflow_id: str, org_id: str, integration_id: UUID):
+    # Having this as a step allows separate observability
+    return apply_cdc_to_latest(workflow_id, org_id, integration_id)
+```
+
+### Keep in Workflows For:
+
+✅ **Control Flow and Orchestration**
+```python
+@DBOS.workflow()
+def elt_pipeline_workflow(org_id: str, integration_id: UUID):
+    # Workflow handles sequencing and control flow
+    users_loaded = extract_and_load_workflow(org_id, integration_id)
+    cdc_changes = detect_changes_workflow(org_id, integration_id)
+    latest_result = apply_changes_to_latest_workflow(org_id, integration_id)
+    sync_result = sync_to_postgres_workflow(org_id, integration_id)
+    
+    return {
+        "users_loaded": users_loaded,
+        "cdc_changes": cdc_changes,
+        # ...
+    }
+```
+
+✅ **Calling Other Workflows**
+```python
+@DBOS.workflow()
+def root_orchestration_workflow():
+    integrations = get_all_connected_integrations()
+    
+    results = []
+    for integration in integrations:
+        # Workflows calling workflows
+        result = elt_pipeline_workflow(integration.org_id, integration.id)
+        results.append(result)
+    
+    return results
+```
+
+✅ **Conditional Logic**
+```python
+@DBOS.workflow()
+def conditional_workflow(status: str):
+    if status == "new":
+        result = process_new_workflow()
+    elif status == "update":
+        result = process_update_workflow()
+    else:
+        result = process_default_workflow()
+    
+    return result
+```
+
+✅ **Loops and Iteration**
+```python
+@DBOS.workflow()
+def extract_and_load_workflow(org_id: str, integration_id: UUID):
+    # Workflow handles iteration
+    for batch_number in range(1, 11):
+        extract_and_load_batch_workflow(org_id, integration_id, batch_number)
+    
+    return get_unique_user_count(DBOS.workflow_id[:36], org_id, integration_id)
+```
+
+✅ **Simple Data Transformations**
+```python
+@DBOS.workflow()
+def process_data_workflow(raw_data: list):
+    # Simple transformations can stay in workflow
+    processed = [item.upper() for item in raw_data]
+    
+    # But the actual storage should be a step
+    save_data_step(processed)
+    
+    return len(processed)
+```
+
+### Why This Separation Matters
+
+| Aspect | Steps | Workflows |
+|--------|-------|-----------|
+| **Automatic Retries** | ✅ Configurable (max_attempts, backoff) | ❌ No automatic retry |
+| **Transient Failure Handling** | ✅ Retry step only | ❌ Entire workflow fails |
+| **Recovery After Crash** | ✅ Skip already-completed steps | ❌ Re-runs workflow code |
+| **Observability** | ✅ Tracked separately in DBOS | ✅ Tracked as single unit |
+| **Idempotency** | ✅ Step-level guarantee | ✅ Workflow-level guarantee |
+| **Execution Isolation** | ✅ Independent execution | ✅ Part of workflow execution |
+
+### Real Example from This Pipeline
+
+```python
+# ✅ CORRECT: Database work in a step
+@DBOS.step()
+def detect_changes_step(workflow_id: str, org_id: str, integration_id: UUID):
+    """Step handles database operations with potential for transient failures."""
+    changes = detect_and_populate_cdc(workflow_id, org_id, integration_id)
+    return changes
+
+@DBOS.workflow()
+def detect_changes_workflow(org_id: str, integration_id: UUID):
+    """Workflow orchestrates and adds logging/context."""
+    DBOS.logger.info(f"Starting CDC detection for org={org_id}")
+    
+    # Call the step to do the actual work
+    changes = detect_changes_step(DBOS.workflow_id[:36], org_id, integration_id)
+    
+    DBOS.logger.info(f"Detected {changes['total_changes']} changes")
+    return changes
+```
+
+```python
+# ❌ WRONG: Database work directly in workflow
+@DBOS.workflow()
+def detect_changes_workflow_bad(org_id: str, integration_id: UUID):
+    """This loses automatic retry, observability, and granular recovery!"""
+    DBOS.logger.info(f"Starting CDC detection for org={org_id}")
+    
+    # Database call directly in workflow - NO automatic retry!
+    changes = detect_and_populate_cdc(DBOS.workflow_id[:36], org_id, integration_id)
+    
+    DBOS.logger.info(f"Detected {changes['total_changes']} changes")
+    return changes
+```
+
+### Benefits of Proper Separation
+
+1. **Automatic Retry for Transient Failures**
+   - Step: Database timeout? → Auto-retry up to max_attempts
+   - Workflow: Database timeout? → Entire workflow fails
+
+2. **Better Observability**
+   - Can see exactly which step failed and how many times it retried
+   - Step execution time tracked separately from workflow overhead
+
+3. **Granular Recovery**
+   - After crash, workflow resumes from last completed step
+   - Doesn't re-execute expensive database operations
+
+4. **Configuration Flexibility**
+   - Different retry policies for different operations
+   - `fetch_users_from_api`: 3 retries (fast, external)
+   - `insert_users_to_staging`: 10 retries (slow, database)
+
+### Summary
+
+**Steps are for DOING work** (database, API, I/O)  
+**Workflows are for ORCHESTRATING work** (sequencing, control flow, calling steps/workflows)
+
+This separation is what makes DBOS applications resilient, observable, and easy to debug.
+
 ## Data Deduplication
 
 ### The Problem
@@ -142,7 +342,7 @@ WHERE rn = 1
 
 ### How It Works
 
-1. **PARTITION BY id, workflow_id**: Groups records by user, workflow, organization, and integration. Note that the `id` is unique and is generated from the external API `id`.
+1. **PARTITION BY id, workflow_id, organization_id, connected_integration_id**: Groups records by user identity within each tenant context. Note that the `id` is unique per organization/integration combination.
 2. **ORDER BY created_at DESC**: Sorts duplicates with newest first
 3. **ROW_NUMBER()**: Assigns rank 1 to the most recent record
 4. **WHERE rn = 1**: Selects only the latest version
@@ -150,9 +350,10 @@ WHERE rn = 1
 ### Key Features
 
 - Handles duplicates from both step retries and workflow recoveries
-- Preserves the most recent version of each user
+- Preserves the most recent version of each user per tenant
 - Efficient counting without materializing duplicate records
 - Works across different workflow runs
+- **Multi-tenant aware**: Partitioning includes organization_id and connected_integration_id
 
 ## Failure Handling
 
@@ -219,6 +420,54 @@ sequenceDiagram
     R->>R: Return summary
 ```
 
+## Multi-Tenancy Architecture
+
+### The Problem
+
+**User IDs are NOT globally unique!** The same user ID can appear in:
+- Different organizations (different companies using the system)
+- Different integrations (Google vs Azure vs Okta)
+- Different contexts (same person, different identity providers)
+
+### The Solution: Composite Primary Keys
+
+Every table uses multi-tenant composite keys:
+
+```sql
+-- users_staging
+PRIMARY KEY (id, organization_id, connected_integration_id, workflow_id, created_at)
+
+-- users_cdc  
+PRIMARY KEY (id, organization_id, connected_integration_id, workflow_id, detected_at)
+
+-- users_latest
+PRIMARY KEY (id, organization_id, connected_integration_id)
+```
+
+### Multi-Tenant SQL Operations
+
+All JOINs include organization_id and connected_integration_id:
+
+```sql
+-- CDC Detection (INSERT)
+SELECT * FROM staging
+LEFT JOIN users_latest 
+    ON staging.id = latest.id 
+    AND staging.organization_id = latest.organization_id
+    AND staging.connected_integration_id = latest.connected_integration_id
+WHERE latest.id IS NULL
+```
+
+### Benefits
+
+- ✅ Complete data isolation per tenant
+- ✅ Same user ID can exist in multiple contexts
+- ✅ Scales to thousands of organizations
+- ✅ No cross-tenant interference
+- ✅ Window functions partition correctly per tenant
+
+For detailed multi-tenancy documentation, see [MULTI_TENANCY.md](MULTI_TENANCY.md).
+
 ## Key Design Decisions
 
 1. **Hierarchical Workflows**: Enables fine-grained recovery and progress tracking
@@ -228,6 +477,7 @@ sequenceDiagram
 5. **Resilient Steps**: Automatic retries handle transient failures
 6. **Queue Support**: Allows external systems to trigger pipelines
 7. **One HTTP Request Per Step**: Each API call is a separate retriable step
+8. **Multi-Tenant Composite Keys**: Complete tenant isolation at the database level
 
 ## Step Granularity: One HTTP Request Per Step
 

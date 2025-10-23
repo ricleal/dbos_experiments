@@ -19,8 +19,12 @@ from data import User, generate_fake_users
 
 # Import database operations
 from db import (
+    apply_cdc_to_latest,
+    detect_and_populate_cdc,
     get_all_connected_integrations,
+    get_cdc_changes,
     get_unique_user_count,
+    get_user_count,
     insert_users_batch,
 )
 from dbos import DBOS, Queue
@@ -56,7 +60,7 @@ def fetch_users_from_api(
         List of User objects
     """
     DBOS.logger.info(
-        f"Step: Fetching users from API for org={organization_id}, "
+        f"📡 Step: Fetching users from API for org={organization_id}, "
         f"integration={connected_integration_id}, page={page} "
         f"(workflow_id={DBOS.workflow_id})"
     )
@@ -64,7 +68,6 @@ def fetch_users_from_api(
     user_list = generate_fake_users(
         organization_id=organization_id,
         connected_integration_id=connected_integration_id,
-        seed=page + hash(str(connected_integration_id)) % 1000,
         size=10,
     )
 
@@ -95,7 +98,7 @@ def insert_users_to_staging(
         db_path: Path to database
     """
     DBOS.logger.info(
-        f"Step: Inserting {len(user_list)} users to staging table "
+        f"💾 Step: Inserting {len(user_list)} users to staging table "
         f"(workflow_id={DBOS.workflow_id})"
     )
 
@@ -109,7 +112,7 @@ def insert_users_to_staging(
     if random.random() < 0.4:
         raise Exception("Simulated database insertion failure")
 
-    DBOS.logger.info("Step: Users inserted successfully to staging")
+    DBOS.logger.info("✅ Step: Users inserted successfully to staging")
 
 
 # ============================================================================
@@ -117,7 +120,7 @@ def insert_users_to_staging(
 # ============================================================================
 
 
-@DBOS.workflow(max_recovery_attempts=100)
+@DBOS.workflow(max_recovery_attempts=10)
 def extract_and_load_batch_workflow(
     organization_id: str,
     connected_integration_id: UUID,
@@ -138,7 +141,7 @@ def extract_and_load_batch_workflow(
         Count of users in this batch
     """
     DBOS.logger.info(
-        f"Workflow [Extract & Load Batch {batch_number}]: Starting for org={organization_id}, "
+        f"📦 Workflow [Extract & Load Batch {batch_number}]: Starting for org={organization_id}, "
         f"integration={connected_integration_id} "
         f"(workflow_id={DBOS.workflow_id})"
     )
@@ -177,7 +180,7 @@ def extract_and_load_batch_workflow(
     return len(batch_users)
 
 
-@DBOS.workflow(max_recovery_attempts=100)
+@DBOS.workflow(max_recovery_attempts=10)
 def extract_and_load_workflow(
     organization_id: str,
     connected_integration_id: UUID,
@@ -199,7 +202,7 @@ def extract_and_load_workflow(
         Count of unique users loaded
     """
     DBOS.logger.info(
-        f"Workflow [Extract & Load]: Starting for org={organization_id}, "
+        f"🎯 Workflow [Extract & Load]: Starting for org={organization_id}, "
         f"integration={connected_integration_id}, "
         f"num_batches={num_batches}, batch_size={batch_size} "
         f"(workflow_id={DBOS.workflow_id})"
@@ -233,114 +236,296 @@ def extract_and_load_workflow(
     )
 
     DBOS.logger.info(
-        f"Workflow [Extract & Load]: 🏹 Completed. Loaded {user_count} unique users"
+        f"🏹 Workflow [Extract & Load]: ✅ Completed. Loaded {user_count} unique users"
     )
     return user_count
 
 
-@DBOS.workflow()
+@DBOS.step()
+def detect_changes_step(
+    workflow_id: str,
+    organization_id: str,
+    connected_integration_id: UUID,
+) -> dict:
+    """Detect changes between staging and latest tables.
+
+    This step compares the deduplicated staging data with the latest table
+    and populates the CDC table with INSERT and UPDATE operations.
+
+    Args:
+        workflow_id: The workflow ID
+        organization_id: The organization ID
+        connected_integration_id: The connected integration ID
+
+    Returns:
+        Dictionary with change counts
+    """
+    DBOS.logger.info(
+        f"🔍 Step: Detecting changes for org={organization_id}, "
+        f"integration={connected_integration_id}"
+    )
+
+    changes = detect_and_populate_cdc(
+        workflow_id=workflow_id,
+        organization_id=organization_id,
+        connected_integration_id=connected_integration_id,
+    )
+
+    DBOS.logger.info(
+        f"📊 Step: Detected {changes['inserts']} inserts, "
+        f"{changes['updates']} updates, "
+        f"{changes['deletes']} deletes, "
+        f"{changes['total_changes']} total changes"
+    )
+
+    return changes
+
+
+@DBOS.workflow(max_recovery_attempts=10)
 def detect_changes_workflow(
     organization_id: str,
     connected_integration_id: UUID,
-) -> str:
-    """Detect changes and populate CDC table (mock workflow).
+) -> dict:
+    """Detect changes and populate CDC table.
 
-    This is a mock workflow that simulates CDC detection logic.
+    This workflow compares staging data with the latest table and identifies
+    INSERT and UPDATE operations, populating the users_cdc table.
+
+    IDEMPOTENCY: The detect_changes_step first deletes any existing CDC records
+    for this workflow_id before inserting new ones. This ensures that if the
+    workflow crashes and is replayed, we don't create duplicate CDC records.
 
     Args:
         organization_id: The organization ID
         connected_integration_id: The connected integration ID
 
     Returns:
-        Status message
+        Dictionary with change detection results
     """
     DBOS.logger.info(
-        f"Workflow [CDC Detection]: Starting for org={organization_id}, "
+        f"🔎 Workflow [CDC Detection]: Starting for org={organization_id}, "
         f"integration={connected_integration_id} "
         f"(workflow_id={DBOS.workflow_id})"
     )
 
-    # Simulate CDC detection processing
-    DBOS.sleep(2)
-
-    message = (
-        f"CDC detection completed for org={organization_id}, "
-        f"integration={connected_integration_id}"
+    # Get count of records in latest table BEFORE changes
+    latest_count_before = get_user_count(
+        table_name="users_latest",
+        organization_id=organization_id,
+        connected_integration_id=connected_integration_id,
     )
 
-    DBOS.logger.info(f"Workflow [CDC Detection]: {message}")
-    return message
+    DBOS.logger.info(
+        f"📈 Workflow [CDC Detection]: Latest table has {latest_count_before} records before CDC"
+    )
+
+    # Detect changes and populate CDC table (idempotent operation)
+    changes = detect_changes_step(
+        workflow_id=DBOS.workflow_id[:36],
+        organization_id=organization_id,
+        connected_integration_id=connected_integration_id,
+    )
+
+    # Calculate expected final count
+    expected_count = latest_count_before + changes["inserts"] - changes["deletes"]
+
+    DBOS.logger.info(
+        f"✨ Workflow [CDC Detection]: Completed. "
+        f"Detected {changes['total_changes']} changes "
+        f"({changes['inserts']} inserts, {changes['updates']} updates, {changes['deletes']} deletes). "
+        f"Expected final count: {expected_count} (was {latest_count_before})"
+    )
+
+    return changes
 
 
-@DBOS.workflow()
-def apply_changes_to_latest_workflow(
+@DBOS.step()
+def apply_changes_step(
+    workflow_id: str,
     organization_id: str,
     connected_integration_id: UUID,
 ) -> int:
-    """Apply changes to latest table using window function.
+    """Apply CDC changes to the latest table.
 
-    This workflow uses a window function to get unique latest records
-    from the staging table.
+    This step processes INSERT and UPDATE operations from the CDC table
+    and applies them to the users_latest table.
 
     Args:
+        workflow_id: The workflow ID
         organization_id: The organization ID
         connected_integration_id: The connected integration ID
 
     Returns:
-        Count of records in latest table
+        Count of records applied
     """
     DBOS.logger.info(
-        f"Workflow [Apply to Latest]: Starting for org={organization_id}, "
-        f"integration={connected_integration_id} "
-        f"(workflow_id={DBOS.workflow_id})"
-    )
-
-    # Get unique user count using window function
-    unique_count = get_unique_user_count(
-        organization_id=organization_id,
-        connected_integration_id=connected_integration_id,
-        workflow_id=DBOS.workflow_id[:36],
-    )
-
-    DBOS.logger.info(
-        f"Workflow [Apply to Latest]: ▶️ Applied {unique_count} unique records to latest table"
-    )
-
-    return unique_count
-
-
-@DBOS.workflow()
-def sync_to_postgres_workflow(
-    organization_id: str,
-    connected_integration_id: UUID,
-) -> str:
-    """Sync changes to Postgres main database (mock workflow).
-
-    This is a mock workflow that simulates syncing to a main database.
-
-    Args:
-        organization_id: The organization ID
-        connected_integration_id: The connected integration ID
-
-    Returns:
-        Status message
-    """
-    DBOS.logger.info(
-        f"Workflow [Sync to Postgres]: Starting for org={organization_id}, "
-        f"integration={connected_integration_id} "
-        f"(workflow_id={DBOS.workflow_id})"
-    )
-
-    # Simulate sync processing
-    DBOS.sleep(1)
-
-    message = (
-        f"Synced to Postgres for org={organization_id}, "
+        f"⚡ Step: Applying CDC changes to latest table for org={organization_id}, "
         f"integration={connected_integration_id}"
     )
 
-    DBOS.logger.info(f"Workflow [Sync to Postgres]: {message}")
-    return message
+    applied_count = apply_cdc_to_latest(
+        workflow_id=workflow_id,
+        organization_id=organization_id,
+        connected_integration_id=connected_integration_id,
+    )
+
+    DBOS.logger.info(f"✅ Step: Applied {applied_count} changes to latest table")
+
+    return applied_count
+
+
+@DBOS.workflow(max_recovery_attempts=10)
+def apply_changes_to_latest_workflow(
+    organization_id: str,
+    connected_integration_id: UUID,
+) -> dict:
+    """Apply changes from CDC table to latest table.
+
+    This workflow processes INSERT and UPDATE operations from the users_cdc table
+    and applies them to the users_latest table using INSERT OR REPLACE.
+
+    IDEMPOTENCY: The apply_changes_step uses INSERT OR REPLACE, which means:
+    - Multiple applications of the same change produce the same result
+    - No duplicate records are created in users_latest
+    - Safe to replay after a crash
+
+    Args:
+        organization_id: The organization ID
+        connected_integration_id: The connected integration ID
+
+    Returns:
+        Dictionary with counts of applied records and final state
+    """
+    DBOS.logger.info(
+        f"▶️  Workflow [Apply to Latest]: Starting for org={organization_id}, "
+        f"integration={connected_integration_id} "
+        f"(workflow_id={DBOS.workflow_id})"
+    )
+
+    # Apply CDC changes to latest table (idempotent operation)
+    applied_count = apply_changes_step(
+        workflow_id=DBOS.workflow_id[:36],
+        organization_id=organization_id,
+        connected_integration_id=connected_integration_id,
+    )
+
+    # Get final count in latest table
+    latest_count = get_user_count(
+        table_name="users_latest",
+        organization_id=organization_id,
+        connected_integration_id=connected_integration_id,
+    )
+
+    DBOS.logger.info(
+        f"💚 Workflow [Apply to Latest]: Completed. "
+        f"Applied {applied_count} changes, "
+        f"latest table now has {latest_count} records"
+    )
+
+    return {
+        "applied_count": applied_count,
+        "latest_count": latest_count,
+    }
+
+
+@DBOS.step()
+def get_cdc_changes_step(
+    workflow_id: str,
+    organization_id: str,
+    connected_integration_id: UUID,
+) -> List[dict]:
+    """Retrieve CDC changes for syncing.
+
+    Args:
+        workflow_id: The workflow ID
+        organization_id: The organization ID
+        connected_integration_id: The connected integration ID
+
+    Returns:
+        List of CDC change records
+    """
+    DBOS.logger.info(
+        f"📥 Step: Retrieving CDC changes for org={organization_id}, "
+        f"integration={connected_integration_id}"
+    )
+
+    changes = get_cdc_changes(
+        workflow_id=workflow_id,
+        organization_id=organization_id,
+        connected_integration_id=connected_integration_id,
+    )
+
+    DBOS.logger.info(f"📋 Step: Retrieved {len(changes)} CDC changes")
+
+    return changes
+
+
+@DBOS.workflow(max_recovery_attempts=10)
+def sync_to_postgres_workflow(
+    organization_id: str,
+    connected_integration_id: UUID,
+) -> dict:
+    """Sync changes from CDC table to Postgres main database (simulated).
+
+    This workflow retrieves changes from the users_cdc table and simulates
+    syncing them to a Postgres main database. In production, this would:
+    1. Read CDC changes
+    2. Apply them to the Postgres database
+    3. Update sync status/timestamps
+
+    Args:
+        organization_id: The organization ID
+        connected_integration_id: The connected integration ID
+
+    Returns:
+        Dictionary with sync results
+    """
+    DBOS.logger.info(
+        f"🔄 Workflow [Sync to Postgres]: Starting for org={organization_id}, "
+        f"integration={connected_integration_id} "
+        f"(workflow_id={DBOS.workflow_id})"
+    )
+
+    # Get CDC changes to sync
+    cdc_changes = get_cdc_changes_step(
+        workflow_id=DBOS.workflow_id[:36],
+        organization_id=organization_id,
+        connected_integration_id=connected_integration_id,
+    )
+
+    # Simulate syncing to Postgres
+    DBOS.logger.info(
+        f"🔃 Workflow [Sync to Postgres]: Syncing {len(cdc_changes)} changes to Postgres..."
+    )
+
+    # Count changes by type
+    inserts = sum(1 for c in cdc_changes if c["change_type"] == "INSERT")
+    updates = sum(1 for c in cdc_changes if c["change_type"] == "UPDATE")
+    deletes = sum(1 for c in cdc_changes if c["change_type"] == "DELETE")
+
+    # Simulate the sync process
+    DBOS.sleep(1)
+
+    DBOS.logger.info(
+        f"Workflow [Sync to Postgres]: 📤 Synced {len(cdc_changes)} changes "
+        f"({inserts} inserts, {updates} updates, {deletes} deletes) to Postgres"
+    )
+
+    result = {
+        "organization_id": organization_id,
+        "connected_integration_id": str(connected_integration_id),
+        "total_synced": len(cdc_changes),
+        "inserts": inserts,
+        "updates": updates,
+        "deletes": deletes,
+    }
+
+    DBOS.logger.info(
+        f"✅ Workflow [Sync to Postgres]: Completed sync for org={organization_id}, "
+        f"integration={connected_integration_id}"
+    )
+
+    return result
 
 
 # ============================================================================
@@ -348,7 +533,7 @@ def sync_to_postgres_workflow(
 # ============================================================================
 
 
-@DBOS.workflow(max_recovery_attempts=100)
+@DBOS.workflow(max_recovery_attempts=10)
 def elt_pipeline_workflow(
     organization_id: str,
     connected_integration_id: UUID,
@@ -360,6 +545,12 @@ def elt_pipeline_workflow(
     2. Detect Changes (CDC)
     3. Apply to Latest Table
     4. Sync to Postgres
+
+    This workflow can be invoked manually to process a specific org/integration pair.
+    For example using the CLI client:
+    ```bash
+    python client.py start elt_pipeline_workflow organization_id=<org-id> connected_integration_id=<uuid>
+    ```
 
     Args:
         organization_id: The organization ID
@@ -375,28 +566,28 @@ def elt_pipeline_workflow(
     )
 
     # Stage 1: Extract and Load
-    DBOS.logger.info("Workflow [ELT Pipeline]: Stage 1 - Extract & Load")
+    DBOS.logger.info("🔷 Workflow [ELT Pipeline]: Stage 1 - Extract & Load")
     users_loaded = extract_and_load_workflow(
         organization_id=organization_id,
         connected_integration_id=connected_integration_id,
     )
 
     # Stage 2: Detect Changes (CDC)
-    DBOS.logger.info("Workflow [ELT Pipeline]: Stage 2 - CDC Detection")
-    cdc_result = detect_changes_workflow(
+    DBOS.logger.info("🔷 Workflow [ELT Pipeline]: Stage 2 - CDC Detection")
+    cdc_changes = detect_changes_workflow(
         organization_id=organization_id,
         connected_integration_id=connected_integration_id,
     )
 
     # Stage 3: Apply to Latest Table
-    DBOS.logger.info("Workflow [ELT Pipeline]: Stage 3 - Apply to Latest")
-    latest_count = apply_changes_to_latest_workflow(
+    DBOS.logger.info("🔷 Workflow [ELT Pipeline]: Stage 3 - Apply to Latest")
+    latest_result = apply_changes_to_latest_workflow(
         organization_id=organization_id,
         connected_integration_id=connected_integration_id,
     )
 
     # Stage 4: Sync to Postgres
-    DBOS.logger.info("Workflow [ELT Pipeline]: Stage 4 - Sync to Postgres")
+    DBOS.logger.info("🔷 Workflow [ELT Pipeline]: Stage 4 - Sync to Postgres")
     sync_result = sync_to_postgres_workflow(
         organization_id=organization_id,
         connected_integration_id=connected_integration_id,
@@ -406,13 +597,13 @@ def elt_pipeline_workflow(
         "organization_id": organization_id,
         "connected_integration_id": str(connected_integration_id),
         "users_loaded": users_loaded,
-        "cdc_result": cdc_result,
-        "latest_count": latest_count,
+        "cdc_changes": cdc_changes,
+        "latest_result": latest_result,
         "sync_result": sync_result,
     }
 
     DBOS.logger.info(
-        f"✅ Workflow [ELT Pipeline]: Completed for org={organization_id}, "
+        f"🎊 Workflow [ELT Pipeline]: Completed for org={organization_id}, "
         f"integration={connected_integration_id}"
     )
 
@@ -424,11 +615,13 @@ def elt_pipeline_workflow(
 # ============================================================================
 
 
-@DBOS.workflow(max_recovery_attempts=50)
+@DBOS.workflow(max_recovery_attempts=10)
 def root_orchestration_workflow() -> dict:
     """Root workflow that orchestrates ELT pipelines for all org/integration pairs.
 
     Fetches all connected integrations and triggers the ELT pipeline for each.
+
+    This workflow can be invoked manually or via a scheduled trigger.
 
     Returns:
         Dictionary with results from all pipelines
@@ -441,14 +634,14 @@ def root_orchestration_workflow() -> dict:
     integrations = get_all_connected_integrations()
 
     DBOS.logger.info(
-        f"Workflow [Root Orchestration]: Found {len(integrations)} integrations to process"
+        f"🔎 Workflow [Root Orchestration]: Found {len(integrations)} integrations to process"
     )
 
     results = []
 
     for idx, integration in enumerate(integrations, 1):
         DBOS.logger.info(
-            f"Workflow [Root Orchestration]: Processing {idx}/{len(integrations)} - "
+            f"📍 Workflow [Root Orchestration]: Processing {idx}/{len(integrations)} - "
             f"org={integration.organization_id}, integration={integration.id}"
         )
 
@@ -467,7 +660,7 @@ def root_orchestration_workflow() -> dict:
     }
 
     DBOS.logger.info(
-        f"🎉 Workflow [Root Orchestration]: Completed. "
+        f"🎉 Workflow [Root Orchestration]: ✅ Completed. "
         f"Processed {len(integrations)} integrations, "
         f"loaded {summary['total_users']} total users"
     )
@@ -481,7 +674,7 @@ def root_orchestration_workflow() -> dict:
 
 
 @DBOS.scheduled("20 5 * * *")  # Run daily at 5:20 AM GMT
-@DBOS.workflow()
+@DBOS.workflow(max_recovery_attempts=10)
 def scheduled_elt_trigger(scheduled_time, actual_time):
     """Scheduled workflow to trigger the root orchestration workflow.
 
@@ -500,7 +693,7 @@ def scheduled_elt_trigger(scheduled_time, actual_time):
     handle = DBOS.start_workflow(root_orchestration_workflow)
 
     DBOS.logger.info(
-        f"Workflow [Scheduled Trigger]: Started root orchestration "
+        f"🚀 Workflow [Scheduled Trigger]: Started root orchestration "
         f"with workflow_id={handle.workflow_id}"
     )
 

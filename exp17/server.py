@@ -13,6 +13,7 @@ import json
 import multiprocessing
 import os
 import signal
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -60,9 +61,15 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
 
-def health_server_process():
-    """Run the health server in a separate process"""
-    print(f"Health server starting with PID: {os.getpid()}")
+def health_server_process(parent_pid):
+    """Run the health server in a separate process
+
+    Args:
+        parent_pid: PID of parent process to monitor
+    """
+    print(
+        f"Health server starting with PID: {os.getpid()}, monitoring parent PID: {parent_pid}"
+    )
 
     def signal_handler(signum, frame):
         print(f"Health server received signal {signum}, shutting down...")
@@ -71,8 +78,30 @@ def health_server_process():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
+    # Allow port reuse to prevent "Address already in use" errors
     server = HTTPServer(("localhost", 8080), HealthHandler)
+    server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     print("Health server running on http://localhost:8080/health")
+
+    def check_parent():
+        """Monitor parent process and exit if it dies"""
+        while True:
+            time.sleep(1)
+            try:
+                # Check if parent process is still alive
+                # os.kill with signal 0 doesn't kill, just checks if process exists
+                os.kill(parent_pid, 0)
+            except OSError:
+                # Parent process is dead
+                # print(
+                #     f"Parent process {parent_pid} is dead, shutting down health server..."
+                # )
+                os._exit(0)
+
+    # Start parent monitor thread
+    monitor_thread = threading.Thread(target=check_parent, daemon=True)
+    monitor_thread.start()
+
     server.serve_forever()
 
 
@@ -113,8 +142,11 @@ def main():
     # Initialize database
     initialize_database()
 
-    # Start health server process
-    health_process = multiprocessing.Process(target=health_server_process, daemon=True)
+    # Start health server process - pass parent PID for monitoring
+    current_pid = os.getpid()
+    health_process = multiprocessing.Process(
+        target=health_server_process, args=(current_pid,), daemon=True
+    )
     health_process.start()
     print(f"Health process started with PID: {health_process.pid}")
 
