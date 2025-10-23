@@ -7,12 +7,38 @@ This module provides SQLite database operations including:
 - User insertion and querying with duplicate handling
 """
 
+import hashlib
 import json
 import sqlite3
 from typing import List, Optional
 from uuid import NAMESPACE_DNS, UUID, uuid5
 
 from data import ConnectedIntegration, User
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+
+def compute_content_hash(name: str, email: str) -> str:
+    """Compute a hash digest of user content fields.
+
+    This hash is used for efficient CDC change detection. When any of the
+    included fields change, the hash will change, making it easy to detect
+    updates without comparing individual fields.
+
+    Args:
+        name: User's name
+        email: User's email
+
+    Returns:
+        Hexadecimal hash digest (MD5, 32 characters)
+    """
+    # Combine fields with a delimiter to avoid collision issues
+    # e.g., "John:Smith" vs "JohnS:mith" produce different hashes
+    content = f"{name}:{email}"
+    return hashlib.md5(content.encode("utf-8")).hexdigest()
+
 
 # ============================================================================
 # Database Setup Functions
@@ -56,6 +82,7 @@ def create_database(db_path: str = "data.db", truncate: bool = False) -> None:
             connected_integration_id TEXT NOT NULL,
             name TEXT NOT NULL,
             email TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
             created_at DATETIME DEFAULT(datetime('subsec')),
             PRIMARY KEY (id, organization_id, connected_integration_id, workflow_id, created_at)
         )
@@ -72,6 +99,7 @@ def create_database(db_path: str = "data.db", truncate: bool = False) -> None:
             connected_integration_id TEXT NOT NULL,
             name TEXT NOT NULL,
             email TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
             change_type TEXT NOT NULL,  -- 'INSERT', 'UPDATE', 'DELETE'
             detected_at DATETIME DEFAULT(datetime('subsec')),
             PRIMARY KEY (id, organization_id, connected_integration_id, workflow_id, detected_at)
@@ -88,6 +116,7 @@ def create_database(db_path: str = "data.db", truncate: bool = False) -> None:
             connected_integration_id TEXT NOT NULL,
             name TEXT NOT NULL,
             email TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
             last_updated DATETIME DEFAULT(datetime('subsec')),
             PRIMARY KEY (id, organization_id, connected_integration_id)
         )
@@ -223,6 +252,7 @@ def insert_users_batch(
             str(user.connected_integration_id),
             user.name,
             user.email,
+            compute_content_hash(user.name, user.email),  # Add content hash
         )
         for user in user_list
     ]
@@ -230,8 +260,8 @@ def insert_users_batch(
     cursor.executemany(
         """
         INSERT INTO users_staging 
-        (id, workflow_id, external_id, organization_id, connected_integration_id, name, email) 
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (id, workflow_id, external_id, organization_id, connected_integration_id, name, email, content_hash) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         records,
     )
@@ -358,6 +388,11 @@ def detect_and_populate_cdc(
 ) -> dict:
     """Detect changes between staging and latest, populate CDC table.
 
+    This function uses CONTENT HASH-BASED CHANGE DETECTION for efficiency:
+    - Each record has a content_hash (MD5) computed from name + email
+    - UPDATEs are detected by comparing hashes instead of individual fields
+    - Benefits: Simple SQL, easy to extend with more fields, faster with many columns
+
     This function is IDEMPOTENT - it can be called multiple times with the same
     workflow_id without creating duplicates. It first clears any existing CDC
     records for this workflow, then detects and inserts changes.
@@ -399,6 +434,7 @@ def detect_and_populate_cdc(
                 connected_integration_id,
                 name,
                 email,
+                content_hash,
                 created_at,
                 ROW_NUMBER() OVER (
                     PARTITION BY id, workflow_id, organization_id, connected_integration_id
@@ -416,7 +452,7 @@ def detect_and_populate_cdc(
     insert_query = (
         staging_cte
         + """
-        INSERT INTO users_cdc (id, workflow_id, external_id, organization_id, connected_integration_id, name, email, change_type)
+        INSERT INTO users_cdc (id, workflow_id, external_id, organization_id, connected_integration_id, name, email, content_hash, change_type)
         SELECT 
             s.id,
             ? as workflow_id,
@@ -425,6 +461,7 @@ def detect_and_populate_cdc(
             s.connected_integration_id,
             s.name,
             s.email,
+            s.content_hash,
             'INSERT' as change_type
         FROM staging_deduped s
         LEFT JOIN users_latest l ON s.id = l.id 
@@ -452,12 +489,13 @@ def detect_and_populate_cdc(
     )
     inserts = cursor.fetchone()[0]
 
-    # Detect UPDATEs: Records in both staging and latest with different data
+    # Detect UPDATEs: Records in both staging and latest with different content_hash
+    # Using hash comparison is more efficient and extensible than comparing individual fields
     # Multi-tenant: JOIN on id, organization_id, and connected_integration_id
     update_query = (
         staging_cte
         + """
-        INSERT INTO users_cdc (id, workflow_id, external_id, organization_id, connected_integration_id, name, email, change_type)
+        INSERT INTO users_cdc (id, workflow_id, external_id, organization_id, connected_integration_id, name, email, content_hash, change_type)
         SELECT 
             s.id,
             ? as workflow_id,
@@ -466,13 +504,14 @@ def detect_and_populate_cdc(
             s.connected_integration_id,
             s.name,
             s.email,
+            s.content_hash,
             'UPDATE' as change_type
         FROM staging_deduped s
         INNER JOIN users_latest l ON s.id = l.id 
             AND s.organization_id = l.organization_id 
             AND s.connected_integration_id = l.connected_integration_id
         WHERE s.rn = 1 
-            AND (s.name != l.name OR s.email != l.email)
+            AND s.content_hash != l.content_hash
     """
     )
 
@@ -500,7 +539,7 @@ def detect_and_populate_cdc(
     delete_query = (
         staging_cte
         + """
-        INSERT INTO users_cdc (id, workflow_id, external_id, organization_id, connected_integration_id, name, email, change_type)
+        INSERT INTO users_cdc (id, workflow_id, external_id, organization_id, connected_integration_id, name, email, content_hash, change_type)
         SELECT 
             l.id,
             ? as workflow_id,
@@ -509,6 +548,7 @@ def detect_and_populate_cdc(
             l.connected_integration_id,
             l.name,
             l.email,
+            l.content_hash,
             'DELETE' as change_type
         FROM users_latest l
         LEFT JOIN staging_deduped s ON l.id = s.id 
@@ -589,7 +629,7 @@ def apply_cdc_to_latest(
     # IDEMPOTENT: INSERT OR REPLACE ensures no duplicates
     # If id exists, it replaces; if not, it inserts
     apply_query = """
-        INSERT OR REPLACE INTO users_latest (id, external_id, organization_id, connected_integration_id, name, email, last_updated)
+        INSERT OR REPLACE INTO users_latest (id, external_id, organization_id, connected_integration_id, name, email, content_hash, last_updated)
         SELECT 
             id,
             external_id,
@@ -597,6 +637,7 @@ def apply_cdc_to_latest(
             connected_integration_id,
             name,
             email,
+            content_hash,
             datetime('subsec') as last_updated
         FROM users_cdc
         WHERE workflow_id = ?
@@ -659,7 +700,7 @@ def get_cdc_changes(
 
     query = """
         SELECT id, external_id, organization_id, connected_integration_id, 
-               name, email, change_type, detected_at
+               name, email, content_hash, change_type, detected_at
         FROM users_cdc
         WHERE workflow_id = ?
             AND organization_id = ?
@@ -680,8 +721,9 @@ def get_cdc_changes(
             "connected_integration_id": row[3],
             "name": row[4],
             "email": row[5],
-            "change_type": row[6],
-            "detected_at": row[7],
+            "content_hash": row[6],
+            "change_type": row[7],
+            "detected_at": row[8],
         }
         for row in rows
     ]
