@@ -286,10 +286,53 @@ def process_data_workflow(raw_data: list):
     return len(processed)
 ```
 
+### Exception Handling: Critical Difference
+
+**⚠️ CRITICAL:** Steps and workflows handle exceptions completely differently:
+
+#### Steps with Exceptions
+When an exception is thrown from a **step**:
+- ✅ **The step is automatically retried** (if `retries_allowed=True`)
+- ✅ Retries follow configured backoff strategy (`max_attempts`, `backoff_rate`, `interval_seconds`)
+- ✅ If all retries are exhausted, the exception propagates to the parent workflow
+- ✅ The step's state is preserved across retries
+
+```python
+@DBOS.step(retries_allowed=True, max_attempts=3, backoff_rate=2.0, interval_seconds=1.0)
+def fetch_users_from_api(page: int):
+    # If this throws an exception:
+    # - Attempt 1: Wait 1s, retry
+    # - Attempt 2: Wait 2s, retry  
+    # - Attempt 3: Wait 4s, retry
+    # - After 3 attempts: Exception propagates to workflow
+    response = requests.get(f"https://api.example.com/users?page={page}")
+    return response.json()
+```
+
+#### Workflows with Exceptions
+When an exception is thrown from a **workflow**:
+- ❌ **The workflow TERMINATES immediately**
+- ❌ DBOS records the exception and sets workflow status to `ERROR`
+- ❌ The workflow does **NOT** automatically recover or retry
+- ❌ Manual intervention is required (use `DBOS.resume_workflow(workflow_id)`)
+
+```python
+@DBOS.workflow()
+def my_workflow():
+    # If this throws an exception, the workflow terminates with status ERROR
+    # No automatic retry happens!
+    if some_condition:
+        raise ValueError("Workflow failed!")  # Workflow terminates here
+    
+    # This code never executes after exception
+    return result
+```
+
 ### Why This Separation Matters
 
 | Aspect | Steps | Workflows |
 |--------|-------|-----------|
+| **Exception Handling** | ✅ Automatic retry (configurable) | ❌ Terminates immediately, status=ERROR |
 | **Automatic Retries** | ✅ Configurable (max_attempts, backoff) | ❌ No automatic retry |
 | **Transient Failure Handling** | ✅ Retry step only | ❌ Entire workflow fails |
 | **Recovery After Crash** | ✅ Skip already-completed steps | ❌ Re-runs workflow code |
