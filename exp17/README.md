@@ -181,6 +181,7 @@ CREATE TABLE users_staging (
     connected_integration_id TEXT NOT NULL,
     name TEXT NOT NULL,
     email TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
     created_at DATETIME DEFAULT(datetime('subsec')),
     PRIMARY KEY (id, organization_id, connected_integration_id, workflow_id, created_at)
 )
@@ -204,6 +205,7 @@ CREATE TABLE users_cdc (
     connected_integration_id TEXT NOT NULL,
     name TEXT NOT NULL,
     email TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
     change_type TEXT NOT NULL,  -- 'INSERT', 'UPDATE', 'DELETE'
     detected_at DATETIME DEFAULT(datetime('subsec')),
     PRIMARY KEY (id, organization_id, connected_integration_id, workflow_id, detected_at)
@@ -226,6 +228,7 @@ CREATE TABLE users_latest (
     connected_integration_id TEXT NOT NULL,
     name TEXT NOT NULL,
     email TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
     last_updated DATETIME DEFAULT(datetime('subsec')),
     PRIMARY KEY (id, organization_id, connected_integration_id)
 )
@@ -248,8 +251,23 @@ The pipeline follows a proper ELT flow with four distinct stages:
 ### Stage 2: CDC Detection
 - Compares deduplicated staging data with `users_latest`
 - Identifies INSERT operations (new records)
-- Identifies UPDATE operations (changed records)
+- Identifies UPDATE operations (changed records) using **content hash comparison**
+- Identifies DELETE operations (removed records)
 - Populates `users_cdc` table with detected changes
+
+**Content Hash-Based Change Detection:**
+
+The pipeline uses an **MD5 content hash** for efficient change detection:
+- Each record has a `content_hash` computed from `name:email`
+- UPDATEs are detected by comparing hashes instead of individual fields
+- Benefits: Simpler SQL, easy to extend with more fields, faster with many columns
+
+```python
+def compute_content_hash(name: str, email: str) -> str:
+    """Compute MD5 hash of user content fields."""
+    content = f"{name}:{email}"
+    return hashlib.md5(content.encode("utf-8")).hexdigest()
+```
 
 **SQL Logic (Multi-Tenant Aware):**
 ```sql
@@ -261,13 +279,21 @@ LEFT JOIN users_latest
     AND staging.connected_integration_id = latest.connected_integration_id
 WHERE latest.id IS NULL
 
--- UPDATEs: Records in both with different data
+-- UPDATEs: Records in both with different content_hash
 SELECT * FROM staging_deduped
 INNER JOIN users_latest 
     ON staging.id = latest.id
     AND staging.organization_id = latest.organization_id
     AND staging.connected_integration_id = latest.connected_integration_id
-WHERE staging.name != latest.name OR staging.email != latest.email
+WHERE staging.content_hash != latest.content_hash
+
+-- DELETEs: Records in latest but not in current staging
+SELECT * FROM users_latest
+LEFT JOIN staging_deduped
+    ON latest.id = staging.id
+    AND latest.organization_id = staging.organization_id
+    AND latest.connected_integration_id = staging.connected_integration_id
+WHERE staging.id IS NULL
 ```
 
 All JOINs include `organization_id` and `connected_integration_id` to ensure proper multi-tenant isolation.
