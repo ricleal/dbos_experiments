@@ -273,7 +273,7 @@ def get_unique_user_count(
                 connected_integration_id,
                 created_at,
                 ROW_NUMBER() OVER (
-                    PARTITION BY id, workflow_id
+                    PARTITION BY id, workflow_id, organization_id, connected_integration_id
                     ORDER BY created_at DESC
                 ) as rn
             FROM users

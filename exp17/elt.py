@@ -72,7 +72,7 @@ def fetch_users_from_api(
     if random.random() < 0.02:
         raise Exception("Simulated API failure")
 
-    DBOS.logger.info(f"Step: Successfully fetched {len(user_list)} users from API")
+    # DBOS.logger.info(f"Step: Successfully fetched {len(user_list)} users from API")
     return user_list
 
 
@@ -168,7 +168,7 @@ def extract_and_load_batch_workflow(
     )
     insert_users_to_staging(
         user_list=batch_users,
-        workflow_id=DBOS.workflow_id,
+        workflow_id=DBOS.workflow_id[:36],
     )
 
     DBOS.logger.info(
@@ -227,13 +227,13 @@ def extract_and_load_workflow(
 
     # Get unique user count (handles duplicates from retries)
     user_count = get_unique_user_count(
-        workflow_id=DBOS.workflow_id,
+        workflow_id=DBOS.workflow_id[:36],
         organization_id=organization_id,
         connected_integration_id=connected_integration_id,
     )
 
     DBOS.logger.info(
-        f"Workflow [Extract & Load]: Completed. Loaded {user_count} unique users"
+        f"Workflow [Extract & Load]: 🏹 Completed. Loaded {user_count} unique users"
     )
     return user_count
 
@@ -299,10 +299,11 @@ def apply_changes_to_latest_workflow(
     unique_count = get_unique_user_count(
         organization_id=organization_id,
         connected_integration_id=connected_integration_id,
+        workflow_id=DBOS.workflow_id[:36],
     )
 
     DBOS.logger.info(
-        f"Workflow [Apply to Latest]: Applied {unique_count} unique records to latest table"
+        f"Workflow [Apply to Latest]: ▶️ Applied {unique_count} unique records to latest table"
     )
 
     return unique_count

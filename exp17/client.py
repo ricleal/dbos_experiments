@@ -146,6 +146,11 @@ async def trigger_workflow(workflow_name: str, params: list[str]) -> tuple[str, 
     handle: WorkflowHandleAsync = await client.enqueue_async(options, **workflow_kwargs)
 
     print(f"\n✅ Workflow enqueued with ID: {handle.workflow_id}")
+
+    # Get initial status
+    status = await handle.get_status()
+    print(f"Initial Status: {status.status}")
+
     print("Waiting for workflow to complete...")
 
     # Wait for the workflow to complete and get the result
