@@ -14,6 +14,7 @@ Usage:
 """
 
 import asyncio
+import threading
 import time
 from functools import wraps
 from typing import Any, Callable, TypeVar
@@ -48,7 +49,8 @@ def rate_limit(calls: int, period: float) -> Callable[[F], F]:
             data = await fetch_data()
 
     Note:
-        - Uses asyncio.Lock to ensure thread-safety in async contexts
+        - Uses threading.Lock to ensure thread-safety across multiple threads and event loops
+        - Works correctly with asyncio in single or multi-threaded contexts
         - Tracks timing using time.monotonic() for accuracy
         - Calculates minimum interval as period / calls
         - Automatically sleeps to maintain even spacing
@@ -56,24 +58,30 @@ def rate_limit(calls: int, period: float) -> Callable[[F], F]:
     min_interval = period / calls
 
     def decorator(func: F) -> F:
-        last_call_time = None
-        lock = asyncio.Lock()
+        next_allowed_time = None
+        lock = threading.Lock()
 
         @wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            nonlocal last_call_time
+            nonlocal next_allowed_time
 
-            async with lock:
+            # Calculate wait time inside lock
+            with lock:
                 current_time = time.monotonic()
 
-                if last_call_time is not None:
-                    elapsed = current_time - last_call_time
-                    if elapsed < min_interval:
-                        wait_time = min_interval - elapsed
-                        await asyncio.sleep(wait_time)
+                if next_allowed_time is not None:
+                    # Wait until the next allowed time
+                    wait_time = max(0, next_allowed_time - current_time)
+                    # Schedule next call min_interval after the reserved time
+                    next_allowed_time = next_allowed_time + min_interval
+                else:
+                    # First call - no wait needed
+                    wait_time = 0
+                    next_allowed_time = current_time + min_interval
 
-                # Always update last_call_time to now, after any sleep
-                last_call_time = time.monotonic()
+            # Sleep outside the lock if needed
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
 
             return await func(*args, **kwargs)
 

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sys
@@ -10,9 +11,20 @@ from rate_limiter import rate_limit
 # Example of using the rate limiter in a step
 
 
-@rate_limit(calls=4, period=1)
 @DBOS.step(retries_allowed=True)
 async def call_api_step(url: str) -> str:
+    """Fast mock API call for testing rate limiter without external throttling"""
+    DBOS.logger.debug(
+        f"\tStep: Mock API call {DBOS.step_status.current_attempt + 1} of {DBOS.step_status.max_attempts}"
+    )
+    # Simulate minimal work
+    await asyncio.sleep(0.001)
+    return f"mock_response_for_{url}"
+
+
+@DBOS.step(retries_allowed=True)
+async def call_real_api_step(url: str) -> str:
+    """Real API call - may be throttled by external services"""
     DBOS.logger.debug(
         f"\tStep: Starting calling API {DBOS.step_status.current_attempt + 1} of {DBOS.step_status.max_attempts} :: {url}"
     )
@@ -28,32 +40,41 @@ async def call_api_step(url: str) -> str:
     return r
 
 
+# Create a rate-limited wrapper for calling the step
+_rate_limit_start_time = None
+_last_step_entry_time = None
+
+
+@rate_limit(calls=4, period=1)
+async def rate_limited_call_api(url: str) -> str:
+    """Rate-limited wrapper that controls cadence of step invocations"""
+    global _rate_limit_start_time, _last_step_entry_time
+
+    if _rate_limit_start_time is None:
+        _rate_limit_start_time = time.monotonic()
+
+    entry_time = time.monotonic()
+    elapsed = entry_time - _rate_limit_start_time
+
+    if _last_step_entry_time is not None:
+        gap = entry_time - _last_step_entry_time
+        DBOS.logger.info(f"Step entering at {elapsed:.3f}s (gap: {gap * 1000:.0f}ms)")
+    else:
+        DBOS.logger.info(f"Step entering at {elapsed:.3f}s")
+
+    _last_step_entry_time = entry_time
+    return await call_api_step(url)
+
+
 @DBOS.workflow()
 async def orchestration_workflow() -> int:
     DBOS.logger.info("Workflow: Starting")
 
     bytes_size = 0
-    start = time.time()
-    last_call_time = None
 
     for i in range(1, 21):
-        elapsed = time.time() - start
-
-        # Log time between calls
-        if last_call_time is not None:
-            time_since_last = elapsed - last_call_time
-            DBOS.logger.info(
-                f"Call {i} at {elapsed:.3f}s (gap: {time_since_last * 1000:.0f}ms)"
-            )
-        else:
-            DBOS.logger.info(f"Call {i} at {elapsed:.3f}s")
-
-        call_start = time.time()
-        r = await call_api_step("https://www.cloudflare.com/cdn-cgi/trace")
-        call_end = time.time()
-
-        DBOS.logger.info(f"\tStep completed in {(call_end - call_start) * 1000:.0f}ms")
-        last_call_time = elapsed
+        # Using mock calls to verify rate limiter without external throttling
+        r = await rate_limited_call_api("test_url")
         bytes_size += sys.getsizeof(r)
 
     DBOS.logger.info("Workflow: Finishing")
