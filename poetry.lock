@@ -251,14 +251,14 @@ files = [
 
 [[package]]
 name = "dbos"
-version = "2.1.0"
+version = "2.5.0"
 description = "Ultra-lightweight durable execution in Python"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "dbos-2.1.0-py3-none-any.whl", hash = "sha256:8e9c1a951260908fa9958c26049f745578eee82e5e6d3cde1047083aa86719d2"},
-    {file = "dbos-2.1.0.tar.gz", hash = "sha256:3ef3d5f1781c951637abd11a8d2145c8739beaca654f4ce7bc03ef436d6ce5c5"},
+    {file = "dbos-2.5.0-py3-none-any.whl", hash = "sha256:476936ee4ef9fbb7ce9cbf52e944ff6f69b49c11a43270774591c742622fac5c"},
+    {file = "dbos-2.5.0.tar.gz", hash = "sha256:6e13b1ddefbbc4143152f23d6c87ce36307e98d1fdabb83a027223161ece2b4d"},
 ]
 
 [package.dependencies]
@@ -858,7 +858,7 @@ description = "PostgreSQL database adapter for Python -- C optimisation distribu
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "implementation_name != \"pypy\" or sys_platform == \"win32\""
+markers = "sys_platform == \"win32\" or implementation_name != \"pypy\""
 files = [
     {file = "psycopg_binary-3.2.10-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:037dc92fc7d3f2adae7680e17216934c15b919d6528b908ac2eb52aecc0addcf"},
     {file = "psycopg_binary-3.2.10-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:84f7e8c5e5031db342ae697c2e8fb48cd708ba56990573b33e53ce626445371d"},
@@ -2081,4 +2081,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "f521dffbf4ff6997a515aa6be4b14bd3d50aaf9f0ed7957e55c09d0a5b9b7cbe"
+content-hash = "8807af811a7a6b5fd01d45869aef52939d978e9c9ea77497aa3fe42cf5d2df75"
