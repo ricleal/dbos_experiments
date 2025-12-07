@@ -8,8 +8,8 @@ package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.12"
-dbos = "^2.5.0"
-fastapi = "^0.115.7"
+dbos = "2.6.0"
+fastapi = "^0.124.0"
 pgcli = "^4.1.0"
 requests = "^2.32.3"
 websockets = "^14.2"
@@ -20,6 +20,7 @@ opentelemetry-instrumentation = "^0.51b0"
 faker = "^37.4.2"
 snakeviz = "^2.2.2"
 httpx = "^0.28.1"
+psutil = "^7.1.3"
 
 
 [tool.poetry.group.dev.dependencies]
@@ -27,6 +28,7 @@ ipython = "^8.31.0"
 sqlacodegen = "3.0.0rc5"
 pytest = "^8.4.1"
 pytest-asyncio = "^1.2.0"
+fastapi-cli = "^0.0.16"
 
 [build-system]
 requires = ["poetry-core"]
