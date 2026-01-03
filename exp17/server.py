@@ -7,6 +7,8 @@ The health check runs in a separate process while DBOS.launch() runs in the main
 Architecture:
 - Main process: Runs DBOS.launch() and keeps workflows executing
 - Health check process: HTTP server on port 8080 for health monitoring
+- DuckDB (OLAP): Stores raw untreated data (staging and CDC tables)
+- SQLite (OLTP): Stores final treated and unique data (latest and integrations tables)
 """
 
 import json
@@ -27,7 +29,7 @@ from dbos import DBOS, DBOSConfig
 
 # Import all workflows to register them with DBOS
 # These imports are necessary even if not directly used, as they register the workflows
-from elt import *  # ignore: F403,F401
+from elt import *  # noqa: F403,F401
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -106,18 +108,21 @@ def health_server_process(parent_pid):
 
 
 def initialize_database():
-    """Initialize SQLite database and seed data if needed"""
-    db_path = "data.db"
-    print(f"Initializing database at {db_path}")
+    """Initialize DuckDB (OLAP) and SQLite (OLTP) databases and seed data if needed"""
+    sqlite_path = "data.db"
+    duckdb_path = "data_olap.db"
+    print("Initializing databases:")
+    print(f"  - SQLite (OLTP): {sqlite_path}")
+    print(f"  - DuckDB (OLAP): {duckdb_path}")
 
-    create_database(db_path=db_path, truncate=False)
+    create_database(sqlite_path=sqlite_path, duckdb_path=duckdb_path, truncate=False)
 
     # Seed connected integrations (only if not already seeded)
-    existing_integrations = get_all_connected_integrations(db_path=db_path)
+    existing_integrations = get_all_connected_integrations(db_path=sqlite_path)
     if not existing_integrations:
         print("Seeding connected integrations")
         integrations = seed_connected_integrations(
-            db_path=db_path, num_orgs=3, integrations_per_org=2
+            db_path=sqlite_path, num_orgs=3, integrations_per_org=2
         )
         print(f"Seeded {len(integrations)} connected integrations")
     else:

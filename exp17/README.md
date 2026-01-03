@@ -6,6 +6,10 @@ A resilient, distributed ELT (Extract, Load, Transform) pipeline built with DBOS
 
 This project demonstrates a production-ready ELT pipeline that processes users from multiple external APIs across different organizations and integrations. The pipeline uses DBOS workflows to provide automatic recovery from any failure, ensuring exactly-once semantics and progress tracking.
 
+**Hybrid Database Architecture:**
+- **DuckDB (OLAP)**: Stores raw untreated data (staging and CDC tables)
+- **SQLite (OLTP)**: Stores final treated and unique data (latest table and integrations)
+
 ## Features
 
 - **🔄 Hierarchical Workflows**: Four-level workflow orchestration for fine-grained recovery
@@ -25,9 +29,10 @@ exp17/
 ├── server.py           # DBOS server with health check
 ├── client.py           # Remote workflow triggering client
 ├── data.py             # Data models and fake data generation
-├── db.py               # Database operations and SQL queries
+├── db.py               # Database operations (DuckDB + SQLite)
 ├── ARCHITECTURE.md     # Detailed architecture documentation
-└── data.db             # SQLite database (created at runtime)
+├── data.db             # SQLite database - OLTP (created at runtime)
+└── data_olap.db        # DuckDB database - OLAP (created at runtime)
 ```
 
 ## Quick Start
@@ -114,13 +119,12 @@ python client.py list status=SUCCESS limit=10
 Scheduled Trigger (daily at 5:20 AM GMT)
 └── Root Orchestration Workflow
     └── ELT Pipeline Workflow (per org/integration)
-        ├── Extract & Load Workflow
+        ├── Extract & Load Workflow (to DuckDB)
         │   └── Extract & Load Batch Workflow (per batch)
         │       ├── fetch_users_from_api (per page)
-        │       └── insert_users_to_staging (per batch)
-        ├── CDC Detection Workflow
-        ├── Apply to Latest Workflow
-        └── Sync to Postgres Workflow
+        │       └── insert_users_to_staging (DuckDB - per batch)
+        ├── CDC Detection Workflow (in DuckDB)
+        └── Apply to Latest Workflow (DuckDB → SQLite)
 ```
 
 ### Batching Strategy
@@ -153,9 +157,11 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed architecture documentation.
 
 ## Database Schema
 
-The pipeline uses four tables to implement a proper ELT flow:
+The pipeline uses a hybrid database architecture with DuckDB (OLAP) and SQLite (OLTP):
 
-### `connected_integrations`
+### SQLite (OLTP) - Final Treated Data
+
+#### `connected_integrations`
 
 Stores integration configurations for each organization:
 
@@ -168,55 +174,7 @@ CREATE TABLE connected_integrations (
 )
 ```
 
-### `users_staging`
-
-Staging table for raw data extracted from APIs (supports duplicates for idempotency):
-
-```sql
-CREATE TABLE users_staging (
-    id TEXT NOT NULL,
-    workflow_id TEXT NOT NULL,
-    external_id TEXT NOT NULL,
-    organization_id TEXT NOT NULL,
-    connected_integration_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    created_at DATETIME DEFAULT(datetime('subsec')),
-    PRIMARY KEY (id, organization_id, connected_integration_id, workflow_id, created_at)
-)
-```
-
-**Multi-Tenant Primary Key:** `(id, organization_id, connected_integration_id, workflow_id, created_at)`
-- First 3 fields form the multi-tenant user identity
-- User IDs can be duplicated across different organizations/integrations
-- `workflow_id` and `created_at` enable idempotent retries
-
-### `users_cdc`
-
-Change Data Capture table that tracks INSERT, UPDATE, and DELETE operations:
-
-```sql
-CREATE TABLE users_cdc (
-    id TEXT NOT NULL,
-    workflow_id TEXT NOT NULL,
-    external_id TEXT NOT NULL,
-    organization_id TEXT NOT NULL,
-    connected_integration_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    change_type TEXT NOT NULL,  -- 'INSERT', 'UPDATE', 'DELETE'
-    detected_at DATETIME DEFAULT(datetime('subsec')),
-    PRIMARY KEY (id, organization_id, connected_integration_id, workflow_id, detected_at)
-)
-```
-
-**Multi-Tenant Primary Key:** `(id, organization_id, connected_integration_id, workflow_id, detected_at)`
-- Ensures CDC records are isolated per organization/integration
-- `workflow_id` and `detected_at` support idempotent detection
-
-### `users_latest`
+#### `users_latest`
 
 Latest state table containing deduplicated, current records:
 
@@ -238,22 +196,79 @@ CREATE TABLE users_latest (
 - Enforces uniqueness per user per organization per integration
 - Allows same user ID to exist in different tenant contexts
 
+### DuckDB (OLAP) - Raw Untreated Data
+
+#### `users_staging`
+
+Staging table for raw data extracted from APIs (supports duplicates for idempotency):
+
+```sql
+CREATE TABLE users_staging (
+    id VARCHAR NOT NULL,
+    workflow_id VARCHAR NOT NULL,
+    external_id VARCHAR NOT NULL,
+    organization_id VARCHAR NOT NULL,
+    connected_integration_id VARCHAR NOT NULL,
+    name VARCHAR NOT NULL,
+    email VARCHAR NOT NULL,
+    content_hash VARCHAR NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id, organization_id, connected_integration_id, workflow_id, created_at)
+)
+```
+
+**Multi-Tenant Primary Key:** `(id, organization_id, connected_integration_id, workflow_id, created_at)`
+- First 3 fields form the multi-tenant user identity
+- User IDs can be duplicated across different organizations/integrations
+- `workflow_id` and `created_at` enable idempotent retries
+
+#### `users_cdc`
+
+Change Data Capture table that tracks INSERT, UPDATE, and DELETE operations:
+
+```sql
+CREATE TABLE users_cdc (
+    id VARCHAR NOT NULL,
+    workflow_id VARCHAR NOT NULL,
+    external_id VARCHAR NOT NULL,
+    organization_id VARCHAR NOT NULL,
+    connected_integration_id VARCHAR NOT NULL,
+    name VARCHAR NOT NULL,
+    email VARCHAR NOT NULL,
+    content_hash VARCHAR NOT NULL,
+    change_type VARCHAR NOT NULL,  -- 'INSERT', 'UPDATE', 'DELETE'
+    detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id, organization_id, connected_integration_id, workflow_id, detected_at)
+)
+```
+
+**Multi-Tenant Primary Key:** `(id, organization_id, connected_integration_id, workflow_id, detected_at)`
+- Ensures CDC records are isolated per organization/integration
+- `workflow_id` and `detected_at` support idempotent detection
+
 ## ELT Pipeline Stages
 
-The pipeline follows a proper ELT flow with four distinct stages:
+The pipeline follows a proper ELT flow with three distinct stages:
 
-### Stage 1: Extract & Load
+### Stage 1: Extract & Load to DuckDB (OLAP)
 - Fetches data from external APIs in batches
-- Loads raw data into `users_staging` table
+- Loads raw data into DuckDB `users_staging` table
 - Handles duplicates from retries using composite primary key
 - Uses window functions for deduplication
 
-### Stage 2: CDC Detection
-- Compares deduplicated staging data with `users_latest`
+### Stage 2: CDC Detection in DuckDB
+- Compares deduplicated staging data (DuckDB) with `users_latest` (SQLite)
 - Identifies INSERT operations (new records)
 - Identifies UPDATE operations (changed records) using **content hash comparison**
 - Identifies DELETE operations (removed records)
-- Populates `users_cdc` table with detected changes
+- Populates DuckDB `users_cdc` table with detected changes
+- Uses DuckDB's ATTACH feature to query across databases
+
+### Stage 3: Apply CDC to SQLite (OLTP)
+- Reads CDC records from DuckDB
+- Applies INSERT/UPDATE operations to SQLite `users_latest` table
+- Applies DELETE operations to SQLite `users_latest` table
+- Bridges the OLAP (DuckDB) and OLTP (SQLite) databases
 
 **Content Hash-Based Change Detection:**
 
@@ -288,7 +303,7 @@ INNER JOIN users_latest
 WHERE staging.content_hash != latest.content_hash
 
 -- DELETEs: Records in latest but not in current staging
-SELECT * FROM users_latest
+SELECT * FROM sqlite_db.users_latest
 LEFT JOIN staging_deduped
     ON latest.id = staging.id
     AND latest.organization_id = staging.organization_id
@@ -298,17 +313,19 @@ WHERE staging.id IS NULL
 
 All JOINs include `organization_id` and `connected_integration_id` to ensure proper multi-tenant isolation.
 
-### Stage 3: Apply to Latest
-- Reads changes from `users_cdc` table
-- Applies INSERT and UPDATE operations to `users_latest`
-- Uses `INSERT OR REPLACE` for atomic updates
-- Maintains current state in the latest table
+**Cross-Database Queries:**
 
-### Stage 4: Sync to Postgres
-- Reads changes from `users_cdc` table
-- Simulates syncing to a Postgres main database
-- In production, would execute actual INSERT/UPDATE/DELETE on Postgres
-- Tracks sync status and timestamps
+DuckDB's ATTACH feature is used to query across databases:
+
+```sql
+-- In DuckDB, attach SQLite database
+ATTACH 'data.db' AS sqlite_db (TYPE SQLITE);
+
+-- Now can join DuckDB staging with SQLite latest
+SELECT * FROM users_staging s
+LEFT JOIN sqlite_db.users_latest l 
+    ON s.id = l.id ...
+```
 
 ## Failure Simulation
 

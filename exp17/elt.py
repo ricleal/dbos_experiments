@@ -7,7 +7,9 @@ The pipeline processes users from multiple organizations and connected integrati
 Architecture:
 - Root workflow: Orchestrates ELT pipelines for all org/integration pairs
 - ELT workflow: Runs sequential sub-workflows for each pair
-- Sub-workflows: Extract, CDC detection, apply changes, sync to main DB
+- Sub-workflows: Extract & Load to DuckDB (OLAP), CDC detection in DuckDB, Apply CDC to SQLite (OLTP)
+- DuckDB stores raw untreated data (staging and CDC tables)
+- SQLite stores final treated and unique data (latest table)
 """
 
 import random
@@ -22,7 +24,6 @@ from db import (
     apply_cdc_to_latest,
     detect_and_populate_cdc,
     get_all_connected_integrations,
-    get_cdc_changes,
     get_unique_user_count,
     get_user_count,
     insert_users_batch,
@@ -85,9 +86,9 @@ def fetch_users_from_api(
 def insert_users_to_staging(
     user_list: List[User],
     workflow_id: str,
-    db_path: str = "data.db",
+    duckdb_path: str = "data_olap.db",
 ) -> None:
-    """Insert users into staging table with simulated random failures.
+    """Insert users into DuckDB staging table with simulated random failures.
 
     This step may fail intermittently to simulate database insertion failures.
     Note: Failures occur AFTER insertion, so duplicates may be created on retry.
@@ -95,7 +96,7 @@ def insert_users_to_staging(
     Args:
         user_list: List of users to insert
         workflow_id: Workflow ID for tracking
-        db_path: Path to database
+        duckdb_path: Path to DuckDB database
     """
     DBOS.logger.info(
         f"💾 Step: Inserting {len(user_list)} users to staging table "
@@ -105,7 +106,7 @@ def insert_users_to_staging(
     insert_users_batch(
         user_list=user_list,
         workflow_id=workflow_id,
-        db_path=db_path,
+        duckdb_path=duckdb_path,
     )
 
     # Simulate database insertion failure (40% chance)
@@ -428,106 +429,6 @@ def apply_changes_to_latest_workflow(
     }
 
 
-@DBOS.step()
-def get_cdc_changes_step(
-    workflow_id: str,
-    organization_id: str,
-    connected_integration_id: UUID,
-) -> List[dict]:
-    """Retrieve CDC changes for syncing.
-
-    Args:
-        workflow_id: The workflow ID
-        organization_id: The organization ID
-        connected_integration_id: The connected integration ID
-
-    Returns:
-        List of CDC change records
-    """
-    DBOS.logger.info(
-        f"📥 Step: Retrieving CDC changes for org={organization_id}, "
-        f"integration={connected_integration_id}"
-    )
-
-    changes = get_cdc_changes(
-        workflow_id=workflow_id,
-        organization_id=organization_id,
-        connected_integration_id=connected_integration_id,
-    )
-
-    DBOS.logger.info(f"📋 Step: Retrieved {len(changes)} CDC changes")
-
-    return changes
-
-
-@DBOS.workflow(max_recovery_attempts=10)
-def sync_to_postgres_workflow(
-    organization_id: str,
-    connected_integration_id: UUID,
-) -> dict:
-    """Sync changes from CDC table to Postgres main database (simulated).
-
-    This workflow retrieves changes from the users_cdc table and simulates
-    syncing them to a Postgres main database. In production, this would:
-    1. Read CDC changes
-    2. Apply them to the Postgres database
-    3. Update sync status/timestamps
-
-    Args:
-        organization_id: The organization ID
-        connected_integration_id: The connected integration ID
-
-    Returns:
-        Dictionary with sync results
-    """
-    DBOS.logger.info(
-        f"🔄 Workflow [Sync to Postgres]: Starting for org={organization_id}, "
-        f"integration={connected_integration_id} "
-        f"(workflow_id={DBOS.workflow_id})"
-    )
-
-    # Get CDC changes to sync
-    cdc_changes = get_cdc_changes_step(
-        workflow_id=DBOS.workflow_id[:36],
-        organization_id=organization_id,
-        connected_integration_id=connected_integration_id,
-    )
-
-    # Simulate syncing to Postgres
-    DBOS.logger.info(
-        f"🔃 Workflow [Sync to Postgres]: Syncing {len(cdc_changes)} changes to Postgres..."
-    )
-
-    # Count changes by type
-    inserts = sum(1 for c in cdc_changes if c["change_type"] == "INSERT")
-    updates = sum(1 for c in cdc_changes if c["change_type"] == "UPDATE")
-    deletes = sum(1 for c in cdc_changes if c["change_type"] == "DELETE")
-
-    # Simulate the sync process
-    DBOS.sleep(1)
-
-    DBOS.logger.info(
-        f"Workflow [Sync to Postgres]: 📤 Synced {len(cdc_changes)} changes "
-        f"({inserts} inserts, {updates} updates, {deletes} deletes) to Postgres"
-    )
-
-    result = {
-        "organization_id": organization_id,
-        "connected_integration_id": str(connected_integration_id),
-        "total_synced": len(cdc_changes),
-        "inserts": inserts,
-        "updates": updates,
-        "deletes": deletes,
-    }
-
-    DBOS.logger.info(
-        f"✅ Workflow [Sync to Postgres]: Completed sync for org={organization_id}, "
-        f"integration={connected_integration_id}"
-    )
-
-    return result
-
-
 # ============================================================================
 # Main ELT Pipeline Workflow
 # ============================================================================
@@ -541,10 +442,9 @@ def elt_pipeline_workflow(
     """Run the complete ELT pipeline for a single org/integration pair.
 
     This workflow orchestrates all sub-workflows in sequence:
-    1. Extract and Load
-    2. Detect Changes (CDC)
-    3. Apply to Latest Table
-    4. Sync to Postgres
+    1. Extract and Load raw data into DuckDB (OLAP)
+    2. Detect Changes (CDC) - Build a CDC manifest in DuckDB
+    3. Apply the CDC to Latest Table in SQLite (OLTP)
 
     This workflow can be invoked manually to process a specific org/integration pair.
     For example using the CLI client:
@@ -565,30 +465,25 @@ def elt_pipeline_workflow(
         f"(workflow_id={DBOS.workflow_id})"
     )
 
-    # Stage 1: Extract and Load
-    DBOS.logger.info("🔷 Workflow [ELT Pipeline]: Stage 1 - Extract & Load")
+    # Stage 1: Extract and Load raw data into DuckDB (OLAP)
+    DBOS.logger.info("🔷 Workflow [ELT Pipeline]: Stage 1 - Extract & Load to DuckDB")
     users_loaded = extract_and_load_workflow(
         organization_id=organization_id,
         connected_integration_id=connected_integration_id,
     )
 
-    # Stage 2: Detect Changes (CDC)
-    DBOS.logger.info("🔷 Workflow [ELT Pipeline]: Stage 2 - CDC Detection")
+    # Stage 2: Detect Changes (CDC) - Build CDC manifest in DuckDB
+    DBOS.logger.info("🔷 Workflow [ELT Pipeline]: Stage 2 - CDC Detection in DuckDB")
     cdc_changes = detect_changes_workflow(
         organization_id=organization_id,
         connected_integration_id=connected_integration_id,
     )
 
-    # Stage 3: Apply to Latest Table
-    DBOS.logger.info("🔷 Workflow [ELT Pipeline]: Stage 3 - Apply to Latest")
-    latest_result = apply_changes_to_latest_workflow(
-        organization_id=organization_id,
-        connected_integration_id=connected_integration_id,
+    # Stage 3: Apply CDC to Latest Table in SQLite (OLTP)
+    DBOS.logger.info(
+        "🔷 Workflow [ELT Pipeline]: Stage 3 - Apply to Latest Table (SQLite)"
     )
-
-    # Stage 4: Sync to Postgres
-    DBOS.logger.info("🔷 Workflow [ELT Pipeline]: Stage 4 - Sync to Postgres")
-    sync_result = sync_to_postgres_workflow(
+    latest_result = apply_changes_to_latest_workflow(
         organization_id=organization_id,
         connected_integration_id=connected_integration_id,
     )
@@ -599,7 +494,6 @@ def elt_pipeline_workflow(
         "users_loaded": users_loaded,
         "cdc_changes": cdc_changes,
         "latest_result": latest_result,
-        "sync_result": sync_result,
     }
 
     DBOS.logger.info(
