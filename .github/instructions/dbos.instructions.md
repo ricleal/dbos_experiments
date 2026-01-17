@@ -1,5 +1,5 @@
 ---
-applyTo: '**'
+applyTo: '**/*.py'
 ---
 # Build Reliable Applications With DBOS
 
