@@ -75,7 +75,7 @@ def test_pipeline():
         sqlite_path=sqlite_path,
         duckdb_path=duckdb_path,
     )
-    print(f"✅ CDC changes detected in DuckDB:")
+    print("✅ CDC changes detected in DuckDB:")
     print(f"   - Inserts: {changes['inserts']}")
     print(f"   - Updates: {changes['updates']}")
     print(f"   - Deletes: {changes['deletes']}")
@@ -121,7 +121,7 @@ def test_pipeline():
         sqlite_path=sqlite_path,
         duckdb_path=duckdb_path,
     )
-    print(f"✅ Second CDC detection:")
+    print("✅ Second CDC detection:")
     print(f"   - Inserts: {changes_2['inserts']}")
     print(f"   - Updates: {changes_2['updates']}")
     print(f"   - Deletes: {changes_2['deletes']}")

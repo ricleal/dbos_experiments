@@ -48,7 +48,7 @@ def test_rate_limit_across_threads():
     # We have 9 total calls (3 threads x 3 calls each)
     # With 2 calls/sec (0.5s spacing), this should take ~4 seconds
     print(f"\n9 calls across 3 threads took {elapsed:.2f}s")
-    print(f"Expected: ~4.0s (with 0.5s spacing for 9 calls)")
+    print("Expected: ~4.0s (with 0.5s spacing for 9 calls)")
 
     # Sort by time to see actual ordering
     call_times.sort(key=lambda x: x[2])

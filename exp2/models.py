@@ -1,10 +1,11 @@
+import datetime
+import uuid
 from typing import Optional
 
 from sqlalchemy import DateTime, Double, Integer, PrimaryKeyConstraint, String, Uuid, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-import datetime
-import uuid
+
 
 class Base(DeclarativeBase):
     pass
