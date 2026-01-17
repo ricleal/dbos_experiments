@@ -30,6 +30,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s ->> %(message)s", da
 logger = logging.getLogger(__name__)
 
 
+# Constants for workflow communication
+PROGRESS_EVENT = "progress"
+STATUS_EVENT = "status"
+RESULT_EVENT = "result"
+NOTIFICATION_TOPIC = "notification"
+STREAM_KEY = "progress_stream"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -55,13 +63,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 queue = Queue("example-queue")
-
-# Constants for workflow communication
-PROGRESS_EVENT = "progress"
-STATUS_EVENT = "status"
-RESULT_EVENT = "result"
-NOTIFICATION_TOPIC = "notification"
-STREAM_KEY = "progress_stream"
 
 
 async def fibonacci(n: int) -> int:
@@ -116,7 +117,7 @@ async def workflow_with_events(n_steps: int) -> list[dict]:
     DBOS.set_event(PROGRESS_EVENT, 0)
 
     step_results = []
-    base_number = 10
+    base_number = 28
 
     for i in range(n_steps):
         # Update progress event before each step
@@ -127,10 +128,13 @@ async def workflow_with_events(n_steps: int) -> list[dict]:
         result = await dbos_step(base_number + i)
         step_results.append(result)
 
+    # let's sum all fibonacci results
+    total = sum(r["fibonacci"] for r in step_results)
+
     # Set completion events
     DBOS.set_event(PROGRESS_EVENT, 100)
     DBOS.set_event(STATUS_EVENT, "completed")
-    DBOS.set_event(RESULT_EVENT, {"total_steps": n_steps, "results": step_results})
+    DBOS.set_event(RESULT_EVENT, {"total_steps": n_steps, "total_fibonacci": total})
 
     DBOS.logger.info(f"Workflow {workflow_id} completed")
     return step_results
