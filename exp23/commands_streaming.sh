@@ -36,75 +36,39 @@ echo "Workflow ID: ${WF_ID}"
 echo "Description: Streaming allows workflows to write real-time updates that clients can read"
 echo ""
 
-# Step 1: Start workflow
-echo "📤 Step 1: Starting workflow with 5 steps..."
-echo "Command: http POST ${BASE_URL}/start-workflow-streaming/${WF_ID}/5"
+# Step 1: Start workflow with more steps for better streaming demonstration
+echo "📤 Step 1: Starting workflow with 10 steps..."
+echo "Command: http POST ${BASE_URL}/start-workflow-streaming/${WF_ID}/10"
 echo "✅ This POST request does NOT block - returns immediately"
 echo ""
-http --body POST "${BASE_URL}/start-workflow-streaming/${WF_ID}/5"
+http --body POST "${BASE_URL}/start-workflow-streaming/${WF_ID}/10"
 echo ""
 
 echo "⏳ Workflow is now running and writing to stream..."
+echo "🔄 Polling stream to see new messages appear in real-time..."
 echo ""
 
-sleep 2
-
-# Step 2: Read partial stream
-echo "📖 Step 2: Reading stream (partial - workflow still running)..."
-echo "Command: http GET ${BASE_URL}/workflow-stream/${WF_ID}"
-echo "✅ This GET request does NOT block - returns immediately with current stream content"
-echo ""
-http --body GET "${BASE_URL}/workflow-stream/${WF_ID}"
-echo ""
-
-echo "💡 Notice: Stream contains messages written so far (workflow still running)"
-echo ""
-
-sleep 3
-
-# Step 3: Read more updates
-echo "📖 Step 3: Reading stream again (workflow may have written more)..."
-echo ""
-http --body GET "${BASE_URL}/workflow-stream/${WF_ID}"
-echo ""
-
-sleep 3
-
-# Step 4: Read complete stream
-echo "📖 Step 4: Reading complete stream (workflow should be finished)..."
-echo "Command: http GET ${BASE_URL}/workflow-stream/${WF_ID}"
-echo ""
-http --body GET "${BASE_URL}/workflow-stream/${WF_ID}"
-echo ""
-
-echo "💡 Notice: Stream contains ALL messages written during workflow execution"
-echo "   Each message has a timestamp and structured data"
-echo ""
-
-# Step 5: Demonstrate long-running workflow streaming
-echo "==================================="
-echo "Demonstrating Real-time Streaming"
-echo "==================================="
-echo ""
-
-WF_ID_LONG="test-stream-long-$(date +%s)"
-
-echo "📤 Step 5: Starting long-running workflow (10 steps)..."
-http --body POST "${BASE_URL}/start-workflow-streaming/${WF_ID_LONG}/10"
-echo ""
-
-echo "⏳ Reading stream in real-time every 2 seconds..."
-echo ""
-
-for i in {1..6}; do
-    echo "--- Read #${i} (at ${i}x2 seconds) ---"
-    http --body GET "${BASE_URL}/workflow-stream/${WF_ID_LONG}" 2>&1 | grep -E '"total_messages"|"step"|"message"' | head -5
-    echo ""
-    sleep 2
+# Step 2-5: Poll the stream multiple times to show streaming behavior
+LAST_MESSAGE_COUNT=0
+for i in {1..3}; do
+    echo "--- Poll #${i} (at $(date +%H:%M:%S)) ---"
+    
+    # Get current message count
+    http --body GET "${BASE_URL}/workflow-stream/${WF_ID}"
+    
+    sleep 1
 done
 
-echo "📖 Final read - complete stream:"
-http --body GET "${BASE_URL}/workflow-stream/${WF_ID_LONG}"
+echo ""
+echo "📖 Final stream snapshot - showing all messages:"
+http --body GET "${BASE_URL}/workflow-stream/${WF_ID}"
+echo ""
+
+echo "💡 Key Observations:"
+echo "   • Stream returns current messages IMMEDIATELY (non-blocking)"
+echo "   • New messages appear as workflow executes"
+echo "   • All messages persist in order (full history)"
+echo "   • Stream is closed after workflow completes"
 echo ""
 
 echo "==================================="
@@ -112,21 +76,25 @@ echo "✅ STREAMING TEST COMPLETED"
 echo "==================================="
 echo ""
 echo "Summary:"
-echo "  • Started workflow: ${WF_ID} (5 steps)"
-echo "  • Read stream multiple times during execution"
-echo "  • Started workflow: ${WF_ID_LONG} (10 steps)"
-echo "  • Monitored stream in real-time"
+echo "  • Started workflow: ${WF_ID} (10 steps)"
+echo "  • Polled stream multiple times during execution"
+echo "  • Observed new messages appearing in real-time"
 echo ""
-echo "Key Points:"
-echo "  • GET /workflow-stream does NOT block - returns immediately"
-echo "  • Stream stores ALL messages in order (full history)"
-echo "  • Can read stream multiple times while workflow running"
+echo "Key Points About DBOS Streams:"
+echo "  • read_stream() is a GENERATOR that yields values"
+echo "  • Returns all messages immediately (non-blocking)"
+echo "  • Stream stores complete history in order"
 echo "  • Messages persist after workflow completes"
-echo "  • Perfect for: logs, LLM token streaming, progress monitoring, audit trails"
+echo "  • Stream closes when workflow calls close_stream()"
 echo ""
-echo "Message Structure:"
-echo "  • Each message has timestamp"
-echo "  • Messages are ordered (step 1, 2, 3...)"
-echo "  • Different message types (start, progress, result)"
-echo "  • Stream grows as workflow executes"
+echo "Perfect Use Cases:"
+echo "  • LLM token streaming (real-time AI responses)"
+echo "  • Progress monitoring (build/deploy status)"
+echo "  • Audit trails (action logging)"
+echo "  • Live logs (server/process output)"
+echo ""
+echo "Streaming vs Events vs Messaging:"
+echo "  • Streams: Full history, ordered messages (logs, monitoring)"
+echo "  • Events: Latest value only (progress %, status)"
+echo "  • Messaging: One-time delivery (approvals, notifications)"
 echo ""

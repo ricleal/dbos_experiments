@@ -41,13 +41,13 @@ echo "📤 Step 1: Starting workflow that waits for approval..."
 echo "Command: http POST ${BASE_URL}/start-workflow-messaging/${WF_ID}/3"
 echo "✅ This POST request does NOT block - returns immediately"
 echo ""
-http --body POST "${BASE_URL}/start-workflow-messaging/${WF_ID}/3"
+http --body POST "${BASE_URL}/start-workflow-messaging/${WF_ID}/10"
 echo ""
 
 echo "⏳ Workflow is now running and BLOCKED at recv_async() waiting for approval..."
 echo ""
 
-sleep 2
+sleep 1
 
 # Step 2: Send approval (non-blocking)
 echo "✉️  Step 2: Sending approval message to workflow..."
@@ -62,7 +62,7 @@ echo ""
 echo "📬 Message delivered! Workflow will now continue execution..."
 echo ""
 
-sleep 3
+sleep 1
 
 # Step 3: Demonstrate rejection
 WF_ID_REJECT="test-msg-reject-$(date +%s)"
@@ -77,7 +77,7 @@ echo "📤 Step 3: Starting another workflow..."
 http --body POST "${BASE_URL}/start-workflow-messaging/${WF_ID_REJECT}/3"
 echo ""
 
-sleep 2
+sleep 1
 
 echo "❌ Step 4: Sending rejection message..."
 echo "Command: http POST ${BASE_URL}/send-message/${WF_ID_REJECT} approved:=false reason='Rejected by test'"
@@ -87,7 +87,7 @@ http --body POST "${BASE_URL}/send-message/${WF_ID_REJECT}" \
   reason="Rejected by test"
 echo ""
 
-sleep 2
+sleep 1
 
 # Step 5: Demonstrate timeout (optional)
 echo "==================================="

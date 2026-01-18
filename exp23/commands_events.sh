@@ -37,13 +37,12 @@ echo "Description: Events allow workflows to publish key-value pairs that client
 echo ""
 
 # Step 1: Start workflow
-echo "📤 Step 1: Starting workflow with 3 steps..."
-echo "Command: http POST ${BASE_URL}/start-workflow-events/${WF_ID}/3"
+echo "📤 Step 1: Starting workflow with 10 steps..."
+echo "Command: http POST ${BASE_URL}/start-workflow-events/${WF_ID}/10"
 echo ""
-http --body POST "${BASE_URL}/start-workflow-events/${WF_ID}/3"
+http --body POST "${BASE_URL}/start-workflow-events/${WF_ID}/10"
 echo ""
 
-# sleep 1
 
 # Show all events before Step 2
 echo "📋 Current events state:"
@@ -58,7 +57,6 @@ echo ""
 http --body GET "${BASE_URL}/workflow-events/${WF_ID}/progress"
 echo ""
 
-# sleep 1
 
 # Show all events before Step 3
 echo "📋 Current events state:"
@@ -72,8 +70,6 @@ echo ""
 http --body GET "${BASE_URL}/workflow-events/${WF_ID}/status"
 echo ""
 
-# sleep 2
-
 # Show all events before Step 4
 echo "📋 Current events state:"
 http --body GET "${BASE_URL}/workflow-events/${WF_ID}/all"
@@ -82,9 +78,25 @@ echo ""
 # Step 4: Query result (will wait for workflow to complete)
 echo "🎯 Step 4: Querying result event (waiting for completion)..."
 echo "Command: http GET ${BASE_URL}/workflow-events/${WF_ID}/result"
-echo "⚠️  This will BLOCK until workflow completes and publishes result"
+echo "⚠️  This will RETRY until workflow completes and publishes result"
 echo ""
-http --body GET "${BASE_URL}/workflow-events/${WF_ID}/result"
+
+# Retry loop until success
+ATTEMPT=1
+MAX_ATTEMPTS=20
+while true; do
+    echo "Attempt ${ATTEMPT}/${MAX_ATTEMPTS}..."
+    if http --body --check-status GET "${BASE_URL}/workflow-events/${WF_ID}/result?timeout=1" 2>/dev/null; then
+        echo "✅ Result retrieved successfully!"
+        break
+    else
+        if [ $ATTEMPT -ge $MAX_ATTEMPTS ]; then
+            echo "❌ Max attempts reached. Workflow may still be running."
+            break
+        fi
+        ATTEMPT=$((ATTEMPT + 1))
+    fi
+done
 echo ""
 
 # Show all events before Step 5

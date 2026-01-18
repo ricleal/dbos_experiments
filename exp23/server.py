@@ -17,13 +17,15 @@ Key takeaway: The server never blocks! Clients and individual workflows may wait
 server always remains responsive to handle new requests.
 """
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
+from enum import Enum
 
 import psutil
 import uvicorn
-from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID, WorkflowHandleAsync
+from dbos import DBOS, DBOSConfig, Queue, SetWorkflowID
 from fastapi import FastAPI, HTTPException
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s ->> %(message)s", datefmt="%H:%M:%S")
@@ -31,9 +33,12 @@ logger = logging.getLogger(__name__)
 
 
 # Constants for workflow communication
-PROGRESS_EVENT = "progress"
-STATUS_EVENT = "status"
-RESULT_EVENT = "result"
+class WorkflowEvent(str, Enum):
+    PROGRESS = "progress"
+    STATUS = "status"
+    RESULT = "result"
+
+
 NOTIFICATION_TOPIC = "notification"
 STREAM_KEY = "progress_stream"
 
@@ -91,7 +96,6 @@ async def health_check():
 @DBOS.step(retries_allowed=True)
 async def dbos_step(n: int) -> dict:
     DBOS.logger.info(f"Starting Fibonacci calculation for n={n}")
-    # Run CPU-intensive work in thread pool to avoid blocking
     result = await fibonacci(n)
     DBOS.logger.info(f"Fibonacci({n}) = {result}")
     return {"n": n, "fibonacci": result}
@@ -113,17 +117,17 @@ async def workflow_with_events(n_steps: int) -> list[dict]:
     DBOS.logger.info(f"Starting workflow_with_events {workflow_id} with {n_steps} steps")
 
     # Set initial status event
-    DBOS.set_event(STATUS_EVENT, "started")
-    DBOS.set_event(PROGRESS_EVENT, 0)
+    DBOS.set_event(WorkflowEvent.STATUS.value, "started")
+    DBOS.set_event(WorkflowEvent.PROGRESS.value, 0)
 
     step_results = []
-    base_number = 28
+    base_number = 23
 
     for i in range(n_steps):
         # Update progress event before each step
         progress_pct = int((i / n_steps) * 100)
-        DBOS.set_event(PROGRESS_EVENT, progress_pct)
-        DBOS.set_event(STATUS_EVENT, f"processing_step_{i + 1}")
+        DBOS.set_event(WorkflowEvent.PROGRESS.value, progress_pct)
+        DBOS.set_event(WorkflowEvent.STATUS.value, f"processing_step_{i + 1}")
 
         result = await dbos_step(base_number + i)
         step_results.append(result)
@@ -132,9 +136,9 @@ async def workflow_with_events(n_steps: int) -> list[dict]:
     total = sum(r["fibonacci"] for r in step_results)
 
     # Set completion events
-    DBOS.set_event(PROGRESS_EVENT, 100)
-    DBOS.set_event(STATUS_EVENT, "completed")
-    DBOS.set_event(RESULT_EVENT, {"total_steps": n_steps, "total_fibonacci": total})
+    DBOS.set_event(WorkflowEvent.PROGRESS.value, 100)
+    DBOS.set_event(WorkflowEvent.STATUS.value, "completed")
+    DBOS.set_event(WorkflowEvent.RESULT.value, {"total_steps": n_steps, "total_fibonacci": total})
 
     DBOS.logger.info(f"Workflow {workflow_id} completed")
     return step_results
@@ -229,7 +233,7 @@ async def workflow_with_messaging(n_steps: int) -> dict:
 
     # Process steps
     step_results = []
-    base_number = 10
+    base_number = 20
 
     for i in range(n_steps):
         result = await dbos_step(base_number + i)
@@ -301,7 +305,7 @@ async def workflow_with_streaming(n_steps: int) -> list[dict]:
     DBOS.logger.info(f"Starting workflow_with_streaming {workflow_id}")
 
     # Write initial stream message
-    DBOS.write_stream(
+    await DBOS.write_stream_async(
         STREAM_KEY,
         {
             "timestamp": time.time(),
@@ -311,11 +315,11 @@ async def workflow_with_streaming(n_steps: int) -> list[dict]:
     )
 
     step_results = []
-    base_number = 10
+    base_number = 23
 
     for i in range(n_steps):
         # Stream progress before each step
-        DBOS.write_stream(
+        await DBOS.write_stream_async(
             STREAM_KEY,
             {
                 "timestamp": time.time(),
@@ -330,7 +334,7 @@ async def workflow_with_streaming(n_steps: int) -> list[dict]:
         step_results.append(result)
 
         # Stream result after each step
-        DBOS.write_stream(
+        await DBOS.write_stream_async(
             STREAM_KEY,
             {
                 "timestamp": time.time(),
@@ -341,7 +345,7 @@ async def workflow_with_streaming(n_steps: int) -> list[dict]:
         )
 
     # Stream completion message
-    DBOS.write_stream(
+    await DBOS.write_stream_async(
         STREAM_KEY,
         {
             "timestamp": time.time(),
@@ -352,7 +356,7 @@ async def workflow_with_streaming(n_steps: int) -> list[dict]:
     )
 
     # Close the stream
-    DBOS.close_stream(STREAM_KEY)
+    await DBOS.close_stream_async(STREAM_KEY)
 
     DBOS.logger.info(f"Workflow {workflow_id} completed")
     return step_results
@@ -378,21 +382,29 @@ async def start_workflow_streaming(workflow_id: str, n_steps: int):
 @app.get("/workflow-stream/{workflow_id}")
 async def read_workflow_stream(workflow_id: str):
     """
-    Read all values from a workflow's stream.
-    This returns all streamed values in order.
+    Read all values from a workflow's stream that have been written so far.
+    This returns all streamed values in order without waiting for the stream to close.
 
     BLOCKING BEHAVIOR:
     - This endpoint does NOT block. It immediately returns all messages currently in the stream.
     - Clients can poll this endpoint repeatedly to get new messages as they arrive.
+    - Does NOT wait for stream to close - returns current snapshot immediately.
     """
     stream_values = []
 
     try:
-        # DBOS.read_stream() is NON-BLOCKING - returns immediately with all messages written so far
-        for value in DBOS.read_stream(workflow_id, STREAM_KEY):
-            stream_values.append(value)
+        # Use async for with asyncio.timeout to read only current values without blocking
+        # The timeout ensures we don't wait indefinitely for the stream to close
+        async with asyncio.timeout(0.1):  # Very short timeout to get only current values
+            async for value in DBOS.read_stream_async(workflow_id, STREAM_KEY):
+                stream_values.append(value)
+    except asyncio.TimeoutError:
+        # Timeout is expected - it means we've read all current values
+        pass
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading stream: {str(e)}")
+        # Only raise for non-timeout errors
+        if "TimeoutError" not in str(type(e)):
+            raise HTTPException(status_code=500, detail=f"Error reading stream: {str(e)}")
 
     return {
         "workflow_id": workflow_id,
@@ -402,40 +414,9 @@ async def read_workflow_stream(workflow_id: str):
 
 
 # ============================================================================
-# ORIGINAL ENDPOINTS
+# main entry point to run the FastAPI server
 # ============================================================================
 
-
-@DBOS.workflow(max_recovery_attempts=2)
-async def dbos_workflow(n_steps: int) -> list[dict]:
-    DBOS.logger.info(f"Starting workflow with {n_steps} Fibonacci calculations")
-    step_results = []
-    # Calculate Fibonacci for numbers 10, 11, 12, etc.
-    base_number = 10
-    for i in range(n_steps):
-        result = await dbos_step(base_number + i)
-        step_results.append(result)
-    DBOS.logger.info("Workflow completed")
-    return step_results
-
-
-@app.get("/")
-@DBOS.workflow(max_recovery_attempts=2)
-async def dbos_root_workflow():
-    DBOS.logger.info("Starting root workflow")
-    handles = []
-    # Enqueue 5 workflows, each calculating 1-5 Fibonacci numbers
-    for i in range(1, 6):
-        handle: WorkflowHandleAsync = await queue.enqueue_async(dbos_workflow, i)
-        handles.append(handle)
-
-    # Return handle statuses without blocking
-    statuses = [await handle.get_status() for handle in handles]
-    DBOS.logger.info("Root workflow completed")
-    return {"status": "completed", "handles_status": statuses}
-
-
-DBOS.launch()
 
 # run with: python main2.py
 if __name__ == "__main__":

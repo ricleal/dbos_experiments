@@ -1,332 +1,268 @@
-# DBOS Workflow Communication Examples
+# DBOS Workflow Communication Patterns
 
-This example demonstrates all three workflow communication mechanisms in DBOS:
+This experiment demonstrates three powerful communication patterns for DBOS workflows:
+
 1. **Workflow Events** - Publish key-value pairs that clients can query
-2. **Workflow Messaging** - Send notifications to running workflows
-3. **Workflow Streaming** - Stream real-time data from workflows
+2. **Workflow Messaging** - Send/receive messages to/from workflows  
+3. **Workflow Streaming** - Stream real-time data from workflows to clients
 
-## Quick Start
+## Overview
 
-```bash
-# Terminal 1: Start the server
-python server.py
+The server implements three different workflows, each showcasing a distinct communication pattern. These patterns enable building interactive, real-time applications with durable execution guarantees.
 
-# Terminal 2: Run comprehensive tests
-python test_communication.py
+### Key Concepts
 
-# Or run client examples
-python example_client_lib.py
-```
+**Blocking Behavior Summary:**
+- `DBOS.get_event()`: Blocks the CLIENT request until event available (server handles other requests)
+- `DBOS.recv_async()`: Suspends the WORKFLOW until message arrives (server remains responsive)
+- `DBOS.send()`: NON-BLOCKING - queues message immediately and returns
+- `DBOS.read_stream()`: Returns current stream values immediately (polling-friendly)
+- `DBOS.write_stream()`: NON-BLOCKING - writes to stream and continues
 
-## ⚠️ Important: Understanding Blocking Behavior
-
-### Client-Side Blocking (HTTP Requests)
-- **Events**: `GET /workflow-events/{workflow_id}/{event_key}` **BLOCKS** until event is available or timeout expires (default 60s)
-- **Streaming**: `GET /workflow-stream/{workflow_id}` **DOES NOT BLOCK** - returns immediately with current stream content
-- **Messaging**: `POST /send-message/{workflow_id}` **DOES NOT BLOCK** - returns immediately after queuing message
-
-### Server-Side Blocking (Endpoint Handlers)
-- **Events**: Endpoint blocks while calling `DBOS.get_event()` (waits for event with timeout)
-- **Streaming**: Endpoint does NOT block - `DBOS.read_stream()` returns immediately
-- **Messaging**: Endpoint does NOT block - `DBOS.send()` queues message and returns
-
-### Workflow-Side Blocking (Inside Workflows)
-- **Events**: `DBOS.set_event()` **DOES NOT BLOCK** - publishes immediately
-- **Streaming**: `DBOS.write_stream()` **DOES NOT BLOCK** - writes immediately
-- **Messaging**: `await DBOS.recv_async()` **BLOCKS** until message received or timeout (must use `recv_async` in async workflows!)
-
-### Critical: recv() vs recv_async()
-⚠️ **In async workflows, ALWAYS use `await DBOS.recv_async()`, NOT `DBOS.recv()`**
-
-- ❌ `DBOS.recv()` in async workflow → **Blocks entire event loop** for up to 60+ seconds!
-- ✅ `await DBOS.recv_async()` → Properly awaits without blocking event loop
-
-```python
-# ❌ WRONG - Blocks event loop
-@DBOS.workflow()
-async def bad_workflow():
-    msg = DBOS.recv(topic="approval")  # BLOCKS EVERYTHING!
-
-# ✅ CORRECT - Properly async
-@DBOS.workflow()
-async def good_workflow():
-    msg = await DBOS.recv_async(topic="approval")  # Non-blocking await
-```
-
-See [QUICK_REFERENCE.md](QUICK_REFERENCE.md) for API endpoints and code patterns.
+**Important:** The server never blocks! Individual client requests and workflows may wait, but the server always remains responsive to handle new requests.
 
 ## Setup
 
-Start the server:
+### Prerequisites
+
 ```bash
+# Install required packages
+pip install dbos fastapi uvicorn psutil httpie
+
+# Ensure PostgreSQL is running and accessible
+# Default connection: postgresql://trustle:trustle@localhost:5432/test_dbos_sys
+```
+
+### Start the Server
+
+```bash
+cd exp23
 python server.py
 ```
 
-## Example 1: Workflow Events
+The server starts on `http://localhost:8000` with endpoints for all three communication patterns.
 
-Events allow workflows to publish status information that clients can retrieve.
+## Communication Patterns
 
-### Start a workflow with events:
+### 1. Workflow Events
+
+Events store the **latest value** for each key. Perfect for status tracking and progress monitoring.
+
+**Use Cases:**
+- Progress percentages (0%, 25%, 50%, 100%)
+- Status indicators (started, processing, completed)
+- Final results or summaries
+
+**How it Works:**
+- Workflows publish events with `DBOS.set_event(key, value)`
+- Clients query events with `DBOS.get_event(workflow_id, key)`
+- Each key stores only the **most recent value**
+- Get requests can block until event is available (with timeout)
+
+**Run the Example:**
+
 ```bash
-# Start workflow with ID "wf-events-1" that will run 3 steps
-curl -X POST http://localhost:8000/start-workflow-events/wf-events-1/3
-```
+# Make executable and run
+chmod +x commands_events.sh
+./commands_events.sh
 
-### Query specific events:
-```bash
-# Get progress (0-100%)
-curl http://localhost:8000/workflow-events/wf-events-1/progress
+# Or manually:
+# Start workflow
+http POST http://localhost:8000/start-workflow-events/my-workflow-1/10
 
-# Get current status
-curl http://localhost:8000/workflow-events/wf-events-1/status
-
-# Get final result (will wait until workflow completes)
-curl http://localhost:8000/workflow-events/wf-events-1/result
+# Query specific event (waits up to 5 seconds)
+http GET http://localhost:8000/workflow-events/my-workflow-1/progress
 
 # Get all events at once
-curl http://localhost:8000/workflow-events/wf-events-1/all
+http GET http://localhost:8000/workflow-events/my-workflow-1/all
 ```
 
-### Use Cases:
-- Progress tracking (e.g., "Processing 45% complete")
-- Status updates (e.g., "Validating data", "Processing payment")
-- Returning intermediate results while workflow is running
-- Building interactive UIs that show real-time progress
+**Event Types Demonstrated:**
+- `progress` - Percentage complete (0-100)
+- `status` - Current workflow state (started, processing_step_X, completed)
+- `result` - Final workflow results
 
----
+### 2. Workflow Messaging
 
-## Example 2: Workflow Messaging and Notifications
+Messages enable **one-time delivery** of notifications to workflows. Perfect for approval flows and interactive workflows.
 
-Workflows can wait for external notifications before proceeding.
+**Use Cases:**
+- Approval workflows (wait for user approval)
+- Notifications and alerts
+- Workflow coordination and handoffs
 
-### Start a workflow that waits for approval:
+**How it Works:**
+- External systems send messages with `DBOS.send(workflow_id, message, topic)`
+- Workflows receive messages with `DBOS.recv_async(topic, timeout)`
+- Messages are **queued in the database** - can be sent before workflow starts
+- Each message is delivered exactly once
+
+**Run the Example:**
+
 ```bash
-# Start workflow with ID "wf-msg-1" that will run 3 steps
-curl -X POST http://localhost:8000/start-workflow-messaging/wf-msg-1/3
+# Make executable and run
+chmod +x commands_messaging.sh
+./commands_messaging.sh
+
+# Or manually:
+# Start workflow (waits for approval)
+http POST http://localhost:8000/start-workflow-messaging/my-workflow-2/5
+
+# Send approval message
+http POST http://localhost:8000/send-message/my-workflow-2 approved:=true message="Approved!"
 ```
 
-### Send approval notification:
+**Message Flow:**
+1. Workflow starts and begins waiting for approval
+2. External system sends approval message (or rejection)
+3. Workflow receives message and proceeds or cancels accordingly
+4. Messages persist in database - guaranteed delivery even if workflow restarts
+
+### 3. Workflow Streaming
+
+Streams provide **full message history** in order. Perfect for logs, real-time monitoring, and LLM token streaming.
+
+**Use Cases:**
+- LLM token streaming (real-time AI responses)
+- Build/deployment logs
+- Progress monitoring with detailed steps
+- Audit trails
+
+**How it Works:**
+- Workflows write to streams with `DBOS.write_stream_async(key, value)`
+- Clients read streams with `DBOS.read_stream(workflow_id, key)`
+- All messages are stored in order (complete history)
+- Streams can be read multiple times while workflow is running
+- Close stream with `DBOS.close_stream_async(key)` when done
+
+**Run the Example:**
+
 ```bash
-# Approve the workflow
-curl -X POST http://localhost:8000/send-message/wf-msg-1 \
-  -H "Content-Type: application/json" \
-  -d '{"approved": true, "message": "Approved by admin"}'
+# Make executable and run
+chmod +x commands_streaming.sh
+./commands_streaming.sh
 
-# Or reject/cancel
-curl -X POST http://localhost:8000/send-message/wf-msg-1 \
-  -H "Content-Type: application/json" \
-  -d '{"approved": false, "reason": "Rejected"}'
+# Or manually:
+# Start workflow
+http POST http://localhost:8000/start-workflow-streaming/my-workflow-3/10
+
+# Poll stream repeatedly (returns current snapshot)
+http GET http://localhost:8000/workflow-stream/my-workflow-3
+# Wait a moment and poll again to see new messages
+sleep 2
+http GET http://localhost:8000/workflow-stream/my-workflow-3
 ```
 
-### Check the workflow result:
-```bash
-# Using DBOS CLI (if available)
-dbos workflow get wf-msg-1
+**Stream Message Types:**
+- `start` - Workflow initialization
+- `progress` - Step-by-step progress updates
+- `result` - Step completion with results
+- `complete` - Workflow completion
 
-# Or query the workflow status via your own status endpoint
-```
+**Polling Pattern:**
+The endpoint returns immediately with all messages written so far. Clients can poll repeatedly to get new messages as they arrive. Each poll returns the complete history, allowing clients to track progress in real-time.
 
-### Use Cases:
-- Human-in-the-loop workflows (manual approval steps)
-- Payment confirmations from external webhooks
-- Waiting for external system responses
-- Multi-step processes requiring user interaction
-
----
-
-## Example 3: Workflow Streaming
-
-Workflows can stream real-time updates as they execute.
-
-### Start a workflow with streaming:
-```bash
-# Start workflow with ID "wf-stream-1" that will run 5 steps
-curl -X POST http://localhost:8000/start-workflow-streaming/wf-stream-1/5
-```
-
-### Read the stream (while workflow is running or after):
-```bash
-# Get all streamed messages
-curl http://localhost:8000/workflow-stream/wf-stream-1
-```
-
-Example output:
-```json
-{
-  "workflow_id": "wf-stream-1",
-  "stream_values": [
-    {
-      "timestamp": 1705500000.123,
-      "type": "start",
-      "message": "Workflow started with 5 steps"
-    },
-    {
-      "timestamp": 1705500001.456,
-      "type": "progress",
-      "step": 1,
-      "total_steps": 5,
-      "message": "Starting step 1/5"
-    },
-    {
-      "timestamp": 1705500002.789,
-      "type": "result",
-      "step": 1,
-      "result": {"n": 30, "fibonacci": 832040}
-    },
-    ...
-  ],
-  "total_messages": 15
-}
-```
-
-### Use Cases:
-- Real-time progress monitoring with detailed logs
-- Streaming LLM responses token-by-token
-- Live data processing pipelines
-- Long-running jobs with intermediate results
-- Building dashboards with live updates
-
----
-
-## Comparison of Communication Mechanisms
+## Comparison Table
 
 | Feature | Events | Messaging | Streaming |
 |---------|--------|-----------|-----------|
-| **Direction** | Workflow → Client | Client → Workflow | Workflow → Client |
-| **Data Structure** | Key-value pairs | Messages with topics | Ordered sequence |
-| **Latest Value** | ✓ Yes | ✗ No | ✗ No |
-| **History** | ✗ No (only latest) | ✗ No | ✓ Yes (all values) |
-| **Real-time** | ✓ Yes | ✓ Yes | ✓ Yes |
-| **Best For** | Status/progress | Notifications/approvals | Logs/live updates |
+| **Storage** | Latest value only | One-time delivery | Full history |
+| **Use Case** | Status, progress % | Approvals, notifications | Logs, monitoring |
+| **Reading** | Query by key | Receive in workflow | Poll for updates |
+| **Blocking** | Client waits for value | Workflow waits for message | Non-blocking reads |
+| **Example** | Progress: 75% | Approval: true | Step 1 done, Step 2 done... |
 
----
+## Implementation Details
 
-## Testing All Three Together
+### WorkflowEvent Enum
 
-Here's a complete test scenario:
+The server uses an enum for type-safe event keys:
+
+```python
+class WorkflowEvent(str, Enum):
+    PROGRESS = "progress"
+    STATUS = "status"
+    RESULT = "result"
+```
+
+### Async Considerations
+
+- Use `recv_async()` in async workflows to avoid blocking the event loop
+- Use `write_stream_async()` and `close_stream_async()` in async workflows
+- The server uses asyncio with FastAPI for full async support
+
+### Stream Reading Strategy
+
+The stream endpoint uses a timeout-based approach to read only current values:
+
+```python
+async with asyncio.timeout(0.1):
+    async for value in DBOS.read_stream_async(workflow_id, STREAM_KEY):
+        stream_values.append(value)
+```
+
+This allows the endpoint to return quickly with current values rather than blocking until the stream closes.
+
+## Testing
+
+Each test script (`commands_*.sh`) includes:
+- Server availability check
+- Unique workflow ID generation
+- Step-by-step demonstration with explanations
+- Summary of key concepts
+
+Run all tests:
 
 ```bash
-# Terminal 1: Start the server
-python server.py
-
-# Terminal 2: Test Events
-curl -X POST http://localhost:8000/start-workflow-events/wf-test-events/3
-sleep 2
-curl http://localhost:8000/workflow-events/wf-test-events/all
-
-# Terminal 2: Test Messaging
-curl -X POST http://localhost:8000/start-workflow-messaging/wf-test-msg/3
-# Workflow is now waiting for approval...
-sleep 1
-curl -X POST http://localhost:8000/send-message/wf-test-msg \
-  -H "Content-Type: application/json" \
-  -d '{"approved": true}'
-
-# Terminal 2: Test Streaming
-curl -X POST http://localhost:8000/start-workflow-streaming/wf-test-stream/5
-sleep 3
-curl http://localhost:8000/workflow-stream/wf-test-stream
+./commands_events.sh
+./commands_messaging.sh
+./commands_streaming.sh
 ```
 
----
+## Key Takeaways
 
-## Advanced Usage
+1. **Server Never Blocks**: All operations are non-blocking from the server's perspective
+2. **Client Blocking**: Only client requests block (waiting for events/messages)
+3. **Workflow Blocking**: Only individual workflows block (waiting for messages)
+4. **Durability**: All communication persists in the database
+5. **Recovery**: Workflows can be interrupted and resumed without losing communication state
 
-### Events with Timeout
-```bash
-# Wait up to 10 seconds for an event (default is 5)
-curl "http://localhost:8000/workflow-events/wf-events-1/result?timeout=10"
+## Architecture
+
+```
+┌─────────────┐
+│   Client    │ ←── Events (query latest values)
+│  (HTTP/CLI) │ ←── Stream (poll for updates)
+└──────┬──────┘ ──→ Messages (send notifications)
+       │
+       ↓
+┌─────────────┐
+│ FastAPI     │ ←── Non-blocking request handlers
+│  Server     │ ←── Concurrent request processing
+└──────┬──────┘
+       │
+       ↓
+┌─────────────┐
+│    DBOS     │ ←── Durable execution
+│  Workflows  │ ←── Event/message/stream storage
+└──────┬──────┘ ←── Workflow recovery
+       │
+       ↓
+┌─────────────┐
+│ PostgreSQL  │ ←── Persistent storage
+│  Database   │ ←── ACID guarantees
+└─────────────┘
 ```
 
-### Using from Python Client
+## Further Reading
 
-```python
-from dbos import DBOSClient
-import os
+- [DBOS Workflows Documentation](https://docs.dbos.dev)
+- [Workflow Communication Patterns](https://docs.dbos.dev/api-reference/contexts#workflow-communication)
+- [FastAPI Async Support](https://fastapi.tiangolo.com/async/)
 
-client = DBOSClient(system_database_url=os.environ["DBOS_SYSTEM_DATABASE_URL"])
+## Notes
 
-# Read events
-events = client.get_all_events("wf-events-1")
-print(events)
-
-# Send message
-client.send("wf-msg-1", {"approved": True}, topic="notification")
-
-# Read stream
-for value in client.read_stream("wf-stream-1", "progress_stream"):
-    print(value)
-```
-
----
-
-## Architecture Notes
-
-- **Events**: Best for polling-based UIs where you want the latest status
-- **Messaging**: Best for webhook-based integrations and approval flows
-- **Streaming**: Best for detailed logging and real-time dashboards
-
-All three mechanisms are:
-- ✅ **Durable** - Persisted in the database
-- ✅ **Recoverable** - Survive workflow interruptions
-- ✅ **Reliable** - Guaranteed delivery and ordering
-
----
-
-## Common Patterns
-
-### Pattern 1: Progress Bar UI
-```python
-# Use Events for a simple progress indicator
-while True:
-    progress = get_event(workflow_id, "progress")
-    if progress == 100:
-        break
-    update_ui_progress_bar(progress)
-    sleep(1)
-```
-
-### Pattern 2: Payment Confirmation
-```python
-# Use Messaging for external webhook integration
-@app.post("/payment-webhook/{workflow_id}")
-def payment_webhook(workflow_id: str, payment_status: str):
-    DBOS.send(workflow_id, {"status": payment_status}, topic="payment")
-```
-
-### Pattern 3: Live Log Viewer
-```python
-# Use Streaming for a real-time log viewer
-for log_entry in DBOS.read_stream(workflow_id, "logs"):
-    display_log(log_entry)
-```
-
----
-
-## Troubleshooting
-
-### Event not found
-- Make sure the workflow has executed past the point where it sets the event
-- Check that the event key matches exactly
-- Increase the timeout parameter
-
-### Message not received
-- Verify the workflow ID is correct
-- Check that the topic matches (case-sensitive)
-- Ensure the workflow hasn't timed out its recv() call
-
-### Stream is empty
-- Workflow might not have started streaming yet
-- Check that STREAM_KEY matches
-- Verify workflow hasn't failed before streaming
-
----
-
-## Next Steps
-
-Try building:
-1. A dashboard that polls events every second to show live progress
-2. A webhook endpoint that sends approval messages from external systems
-3. A log viewer that displays streaming output in real-time
-
-For more details, see: https://docs.dbos.dev/python/tutorials/workflow-communication
+- Fibonacci calculations are used as CPU-intensive example steps
+- Base numbers configured for demonstration purposes (manageable execution times)
+- Memory monitoring available via `/health` endpoint
+- All workflows use async/await for proper event loop integration
