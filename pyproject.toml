@@ -6,7 +6,7 @@ authors = [{ name = "Ricardo Leal", email = "ricleal@gmail.com" }]
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "dbos>=2.8.0",
+    "dbos>=2.12",
     "fastapi>=0.124.0",
     "pgcli>=4.1.0",
     "requests>=2.32.3",

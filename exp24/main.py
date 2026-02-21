@@ -38,7 +38,7 @@ app = FastAPI(lifespan=lifespan)
 queue = Queue("example-queue")
 
 
-@DBOS.step(retries_allowed=True, max_attempts=3)
+@DBOS.step()
 def dbos_step(n: int) -> int:
     s = DBOS.step_status
     DBOS.logger.info(f"\t\t{DBOS.workflow_id}::{s.step_id} :: \t Step {n} - Attempt {s.current_attempt}/{s.max_attempts}")

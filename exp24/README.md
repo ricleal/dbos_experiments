@@ -1,5 +1,10 @@
 # Exp24: In limbo workflows
 
+BUG REPORT!
+
+Solved in V2.12
+
+
 # Error
 
 # Terminal 1

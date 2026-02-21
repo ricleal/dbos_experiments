@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:17.2
+    environment:
+      POSTGRES_USER: trustle
+      POSTGRES_PASSWORD: trustle
+      POSTGRES_DB: test
+    ports:
+      - "5432:5432"
+    command: -c log_statement=all
+
+  httpbin:
+    image: kennethreitz/httpbin
+    ports:
+      - "8080:80"
